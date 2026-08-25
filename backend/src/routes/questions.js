@@ -1,5 +1,5 @@
 import express from "express";
-import { getQuestions } from "../services/enemService.js";
+import { EnemApiUnavailableError, getQuestions } from "../services/enemService.js";
 import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
@@ -40,8 +40,14 @@ router.get("/", async (req, res) => {
     } catch (error) {
         console.error(error);
 
+        if (error instanceof EnemApiUnavailableError) {
+            return res.status(502).json({
+                error: "O serviço de questões do ENEM está indisponível. Tente novamente mais tarde."
+            });
+        }
+
         res.status(500).json({
-            error: "Não achou a porra das questões caralho"
+            error: "Não foi possível buscar as questões."
         });
     }
 });

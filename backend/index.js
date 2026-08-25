@@ -23,6 +23,12 @@ app.use(express.json({
     limit: REQUEST_BODY_LIMIT
 }));
 
+app.get("/api/health", (req, res) => {
+    res.status(200).json({
+        status: "online"
+    });
+});
+
 app.use("/api/questions", questionsRouter);
 
 app.get("/", (req, res) => {
