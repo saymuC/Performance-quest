@@ -1,5 +1,6 @@
 import express from "express";
 import { getQuestions } from "../services/enemService.js";
+import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
 
@@ -9,7 +10,11 @@ router.get("/", async (req, res) => {
 
         const data = await getQuestions(year);
 
-        res.json(data);
+        const questions = data.questions.map(sanitizeQuestion)
+
+        res.json({
+            questions
+        });
     } catch (error) {
         console.error(error);
 
