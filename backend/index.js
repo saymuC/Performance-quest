@@ -4,13 +4,11 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { initializeDatabase } from "./src/database/database.js";
+import gamesRouter from "./src/routes/games.js";
 import questionsRouter from "./src/routes/questions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
-
-initializeDatabase();
 
 const app = express();
 
@@ -33,11 +31,20 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/questions", questionsRouter);
+app.use("/api/games", gamesRouter);
 
 app.get("/", (req, res) => {
     res.json({
         name: "Performance Quest API",
         status: "online"
+    });
+});
+
+app.use((error, req, res, next) => {
+    console.error(error);
+
+    res.status(500).json({
+        error: "Ocorreu um erro interno."
     });
 });
 

@@ -18,6 +18,7 @@ export function initializeDatabase() {
         CREATE TABLE IF NOT EXISTS games (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             code TEXT NOT NULL UNIQUE,
+            host_token TEXT,
             status TEXT NOT NULL DEFAULT 'waiting'
                 CHECK (status IN ('waiting', 'in_progress', 'finished')),
             total_questions INTEGER NOT NULL DEFAULT 0
@@ -31,6 +32,7 @@ export function initializeDatabase() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id INTEGER NOT NULL,
             nickname TEXT NOT NULL COLLATE NOCASE,
+            player_token TEXT,
             score INTEGER NOT NULL DEFAULT 0 CHECK (score >= 0),
             joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
@@ -41,6 +43,7 @@ export function initializeDatabase() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id INTEGER NOT NULL,
             position INTEGER NOT NULL CHECK (position >= 1),
+            external_question_index INTEGER,
             question_year INTEGER NOT NULL,
             discipline TEXT NOT NULL,
             question_data TEXT NOT NULL,
@@ -67,6 +70,32 @@ export function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_answers_player_id ON answers(player_id);
         CREATE INDEX IF NOT EXISTS idx_answers_game_question_id ON answers(game_question_id);
     `);
+
+    addColumnIfMissing("games", "host_token", "host_token TEXT");
+    addColumnIfMissing("players", "player_token", "player_token TEXT");
+    addColumnIfMissing(
+        "game_questions",
+        "external_question_index",
+        "external_question_index INTEGER"
+    );
+
+    database.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_games_host_token
+            ON games(host_token) WHERE host_token IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_players_player_token
+            ON players(player_token) WHERE player_token IS NOT NULL;
+    `);
 }
+
+function addColumnIfMissing(table, column, definition) {
+    const columns = database.pragma(`table_info(${table})`);
+    const columnExists = columns.some((currentColumn) => currentColumn.name === column);
+
+    if (!columnExists) {
+        database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    }
+}
+
+initializeDatabase();
 
 export default database;

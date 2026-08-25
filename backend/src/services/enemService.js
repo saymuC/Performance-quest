@@ -20,12 +20,14 @@ function isValidQuestion(question) {
         typeof question === "object" &&
         typeof question.title === "string" &&
         typeof question.discipline === "string" &&
+        typeof question.correctAlternative === "string" &&
         Array.isArray(question.alternatives) &&
         question.alternatives.every((alternative) =>
             alternative &&
             typeof alternative === "object" &&
             typeof alternative.letter === "string" &&
-            typeof alternative.text === "string"
+            typeof alternative.text === "string" &&
+            typeof alternative.isCorrect === "boolean"
         )
     );
 }
