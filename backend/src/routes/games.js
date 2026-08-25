@@ -15,10 +15,49 @@ const MAX_QUESTIONS_PER_GAME = 50;
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const findGameByCode = database.prepare(`
-    SELECT id, code, host_token, status, total_questions, created_at, started_at
+    SELECT id, code, host_token, status, total_questions, current_question_position, created_at, started_at
     FROM games
     WHERE code = ?
 `);
+
+const findCurrentQuestion = database.prepare(`
+    SELECT id, position, question_data, correct_alternative
+    FROM game_questions
+    WHERE game_id = ? AND position = ?
+`);
+
+const findPlayerByToken = database.prepare(`
+    SELECT id, nickname, score
+    FROM players
+    WHERE game_id = ? AND player_token = ?
+`);
+
+const rankingByGame = database.prepare(`
+    SELECT id, nickname, score
+    FROM players
+    WHERE game_id = ?
+    ORDER BY score DESC, joined_at ASC, id ASC
+`);
+
+const saveAnswer = database.transaction(({ playerId, gameQuestionId, alternative, isCorrect, points }) => {
+    database.prepare(`
+        INSERT INTO answers (
+            player_id,
+            game_question_id,
+            selected_alternative,
+            is_correct,
+            points
+        ) VALUES (?, ?, ?, ?, ?)
+    `).run(playerId, gameQuestionId, alternative, Number(isCorrect), points);
+
+    database.prepare(`
+        UPDATE players
+        SET score = score + ?
+        WHERE id = ?
+    `).run(points, playerId);
+
+    return database.prepare("SELECT score FROM players WHERE id = ?").get(playerId).score;
+});
 
 const createGame = database.transaction(({ hostNickname, questions }) => {
     let game;
@@ -219,6 +258,117 @@ router.post("/:code/start", (req, res, next) => {
                 totalQuestions: game.total_questions
             }
         });
+    } catch (error) {
+        return handleGameError(error, res, next);
+    }
+});
+
+router.get("/:code/current", (req, res, next) => {
+    try {
+        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+
+        if (!game) {
+            return res.status(404).json({ error: "Sala não encontrada." });
+        }
+
+        if (game.status !== "in_progress") {
+            return res.status(409).json({ error: "A partida ainda não está em andamento." });
+        }
+
+        const currentQuestion = findCurrentQuestion.get(game.id, game.current_question_position);
+
+        if (!currentQuestion) {
+            return res.status(409).json({ error: "Não existe uma questão ativa nesta partida." });
+        }
+
+        return res.status(200).json({
+            question: JSON.parse(currentQuestion.question_data),
+            position: currentQuestion.position,
+            totalQuestions: game.total_questions
+        });
+    } catch (error) {
+        return handleGameError(error, res, next);
+    }
+});
+
+router.post("/:code/answer", (req, res, next) => {
+    try {
+        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const playerToken = req.get("x-player-token");
+        const alternative = typeof req.body.alternative === "string"
+            ? req.body.alternative.trim().toUpperCase()
+            : "";
+
+        if (!game) {
+            return res.status(404).json({ error: "Sala não encontrada." });
+        }
+
+        if (game.status !== "in_progress") {
+            return res.status(409).json({ error: "A partida não está recebendo respostas." });
+        }
+
+        const player = findPlayerByToken.get(game.id, playerToken);
+
+        if (!player) {
+            return res.status(401).json({ error: "Token de jogador inválido." });
+        }
+
+        const currentQuestion = findCurrentQuestion.get(game.id, game.current_question_position);
+
+        if (!currentQuestion) {
+            return res.status(409).json({ error: "Não existe uma questão ativa nesta partida." });
+        }
+
+        const question = JSON.parse(currentQuestion.question_data);
+        const alternativeExists = question.alternatives.some(
+            (currentAlternative) => currentAlternative.letter === alternative
+        );
+
+        if (!alternativeExists) {
+            return res.status(422).json({ error: "Alternativa inválida para esta questão." });
+        }
+
+        const isCorrect = alternative === currentQuestion.correct_alternative;
+        const points = isCorrect ? 1000 : 0;
+        const totalScore = saveAnswer({
+            playerId: player.id,
+            gameQuestionId: currentQuestion.id,
+            alternative,
+            isCorrect,
+            points
+        });
+
+        return res.status(201).json({
+            correct: isCorrect,
+            points,
+            totalScore
+        });
+    } catch (error) {
+        if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+            return res.status(409).json({
+                error: "Você já respondeu a questão atual."
+            });
+        }
+
+        return handleGameError(error, res, next);
+    }
+});
+
+router.get("/:code/ranking", (req, res, next) => {
+    try {
+        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+
+        if (!game) {
+            return res.status(404).json({ error: "Sala não encontrada." });
+        }
+
+        const ranking = rankingByGame.all(game.id).map((player, index) => ({
+            position: index + 1,
+            nickname: player.nickname,
+            score: player.score
+        }));
+
+        return res.status(200).json({ ranking });
     } catch (error) {
         return handleGameError(error, res, next);
     }

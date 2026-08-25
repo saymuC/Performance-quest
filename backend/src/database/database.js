@@ -23,6 +23,8 @@ export function initializeDatabase() {
                 CHECK (status IN ('waiting', 'in_progress', 'finished')),
             total_questions INTEGER NOT NULL DEFAULT 0
                 CHECK (total_questions >= 0),
+            current_question_position INTEGER NOT NULL DEFAULT 1
+                CHECK (current_question_position >= 1),
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             started_at TEXT,
             finished_at TEXT
@@ -72,6 +74,11 @@ export function initializeDatabase() {
     `);
 
     addColumnIfMissing("games", "host_token", "host_token TEXT");
+    addColumnIfMissing(
+        "games",
+        "current_question_position",
+        "current_question_position INTEGER NOT NULL DEFAULT 1"
+    );
     addColumnIfMissing("players", "player_token", "player_token TEXT");
     addColumnIfMissing(
         "game_questions",
