@@ -4,10 +4,13 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { initializeDatabase } from "./src/database/database.js";
 import questionsRouter from "./src/routes/questions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
+
+initializeDatabase();
 
 const app = express();
 
