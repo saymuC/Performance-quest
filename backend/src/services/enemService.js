@@ -7,6 +7,38 @@ export class EnemApiUnavailableError extends Error {
     }
 }
 
+export class EnemApiInvalidResponseError extends Error {
+    constructor() {
+        super("A API do ENEM retornou um formato inválido.");
+        this.name = "EnemApiInvalidResponseError";
+    }
+}
+
+function isValidQuestion(question) {
+    return (
+        question &&
+        typeof question === "object" &&
+        typeof question.title === "string" &&
+        typeof question.discipline === "string" &&
+        Array.isArray(question.alternatives) &&
+        question.alternatives.every((alternative) =>
+            alternative &&
+            typeof alternative === "object" &&
+            typeof alternative.letter === "string" &&
+            typeof alternative.text === "string"
+        )
+    );
+}
+
+function isValidQuestionsResponse(data) {
+    return (
+        data &&
+        typeof data === "object" &&
+        Array.isArray(data.questions) &&
+        data.questions.every(isValidQuestion)
+    );
+}
+
 export async function getQuestions(year) {
     let response;
 
@@ -22,5 +54,17 @@ export async function getQuestions(year) {
         throw new EnemApiUnavailableError();
     }
 
-    return await response.json();
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        throw new EnemApiInvalidResponseError();
+    }
+
+    if (!isValidQuestionsResponse(data)) {
+        throw new EnemApiInvalidResponseError();
+    }
+
+    return data;
 };
