@@ -3,10 +3,11 @@ import { EnemApiUnavailableError, getQuestions } from "../services/enemService.j
 import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
+const MAX_QUESTIONS_PER_REQUEST = 50;
 
 router.get("/", async (req, res) => {
     try {
-        const { year } = req.query;
+        const { year, area, quantity } = req.query;
 
         // validação 1: o valor year existe?
         if (year === undefined || year === "") {
@@ -30,9 +31,42 @@ router.get("/", async (req, res) => {
                 error: "O ano de busca deve estar entre 2009 e 2023."
             });
         }
+
+        const normalizedArea = typeof area === "string" ? area.trim().toLowerCase() : "";
+
+        if (area !== undefined && !normalizedArea) {
+            return res.status(422).json({
+                error: "A área deve ser um texto válido."
+            });
+        }
+
+        const quantityNumber = Number(quantity);
+
+        if (quantity !== undefined && (
+            !Number.isInteger(quantityNumber) ||
+            quantityNumber < 1 ||
+            quantityNumber > MAX_QUESTIONS_PER_REQUEST
+        )) {
+            return res.status(422).json({
+                error: `A quantidade deve ser um número inteiro entre 1 e ${MAX_QUESTIONS_PER_REQUEST}.`
+            });
+        }
+
         const data = await getQuestions(year);
 
-        const questions = data.questions.map(sanitizeQuestion)
+        let questions = data.questions;
+
+        if (normalizedArea) {
+            questions = questions.filter((question) =>
+                question.discipline?.toLowerCase() === normalizedArea
+            );
+        }
+
+        if (quantity !== undefined) {
+            questions = questions.slice(0, quantityNumber);
+        }
+
+        questions = questions.map(sanitizeQuestion);
 
         res.json({
             questions
