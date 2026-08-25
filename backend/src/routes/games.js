@@ -7,6 +7,7 @@ import {
     EnemApiUnavailableError,
     getQuestions
 } from "../services/enemService.js";
+import { findProhibitedTerm } from "../utils/nicknameModeration.js";
 import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
@@ -158,6 +159,12 @@ router.post("/:code/join", (req, res, next) => {
             });
         }
 
+        if (findProhibitedTerm(nickname)) {
+            return res.status(422).json({
+                error: "O apelido contém conteúdo não permitido. Escolha outro."
+            });
+        }
+
         const playerToken = randomUUID();
         const result = database.prepare(`
             INSERT INTO players (game_id, nickname, player_token)
@@ -220,6 +227,10 @@ router.post("/:code/start", (req, res, next) => {
 function validateGameCreationInput({ hostNickname, year, area, quantity }) {
     if (typeof hostNickname !== "string" || hostNickname.trim().length < 2 || hostNickname.trim().length > 30) {
         return "O apelido do host deve ter entre 2 e 30 caracteres.";
+    }
+
+    if (findProhibitedTerm(hostNickname)) {
+        return "O apelido do host contém conteúdo não permitido. Escolha outro.";
     }
 
     if (!Number.isInteger(Number(year)) || Number(year) < 2009 || Number(year) > 2023) {

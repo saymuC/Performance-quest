@@ -1,0 +1,121 @@
+const PROHIBITED_TERMS = [
+    "arrombada",
+    "arrombado",
+    "babaca",
+    "bicha",
+    "bixa",
+    "boceta",
+    "boiola",
+    "bosta",
+    "buceta",
+    "bunda",
+    "burro",
+    "burra",
+    "cacete",
+    "carai",
+    "caralho",
+    "caralha",
+    "corno",
+    "corna",
+    "cornudo",
+    "cornuda",
+    "cu",
+    "cuzao",
+    "cuzão",
+    "desgraça",
+    "desgraca",
+    "desgraçado",
+    "desgracado",
+    "desgraçada",
+    "desgracada",
+    "escroto",
+    "escrota",
+    "estupido",
+    "estúpido",
+    "estupida",
+    "estúpida",
+    "estuprador",
+    "estupradora",
+    "fdp",
+    "filha da puta",
+    "filhadaputa",
+    "filho da puta",
+    "filhodaputa",
+    "foda",
+    "foda-se",
+    "fodase",
+    "foder",
+    "fudido",
+    "fudida",
+    "fuder",
+    "idiota",
+    "imbecil",
+    "lixo",
+    "maldito",
+    "maldita",
+    "merda",
+    "mongol",
+    "mongoloide",
+    "nazista",
+    "otaria",
+    "otária",
+    "otario",
+    "otário",
+    "pau no cu",
+    "paunocu",
+    "pedofilo",
+    "pedófilo",
+    "pedofila",
+    "pedófila",
+    "piranha",
+    "piroca",
+    "porra",
+    "porrinha",
+    "pqp",
+    "puta",
+    "puto",
+    "putaria",
+    "retardado",
+    "retardada",
+    "rola",
+    "safada",
+    "safado",
+    "trouxa",
+    "vagabunda",
+    "vagabundo",
+    "vadia",
+    "viado",
+    "viadinho",
+    "vsf",
+    "vtnc",
+    "xereca",
+    "xota"
+];
+
+const LEET_REPLACEMENTS = {
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "7": "t",
+    "@": "a",
+    "$": "s",
+    "!": "i"
+};
+
+export function normalizeNickname(nickname) {
+    return nickname
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[013457@$!]/g, (character) => LEET_REPLACEMENTS[character])
+        .replace(/[^a-z0-9]/g, "")
+        .replace(/(.)\1{2,}/g, "$1");
+}
+
+export function findProhibitedTerm(nickname) {
+    const normalizedNickname = normalizeNickname(nickname);
+
+    return PROHIBITED_TERMS.find((term) => normalizedNickname.includes(term)) ?? null;
+}
