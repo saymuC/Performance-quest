@@ -18,6 +18,8 @@ const MAX_QUESTION_DURATION_SECONDS = 120;
 const MAX_POINTS_PER_CORRECT_ANSWER = 1000;
 const MIN_POINTS_PER_CORRECT_ANSWER = 100;
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const GAME_CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{6}$`);
+const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const findGameByCode = database.prepare(`
     SELECT id, code, host_token, status, total_questions, question_duration_seconds,
@@ -199,10 +201,16 @@ router.post("/", async (req, res, next) => {
 
 router.post("/:code/join", (req, res, next) => {
     try {
-        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const code = normalizeGameCode(req.params.code);
         const nickname = typeof req.body.nickname === "string"
             ? req.body.nickname.trim()
             : "";
+
+        if (!code) {
+            return res.status(422).json({ error: "Código de sala inválido." });
+        }
+
+        const game = findGameByCode.get(code);
 
         if (!game) {
             return res.status(404).json({ error: "Sala não encontrada." });
@@ -212,7 +220,7 @@ router.post("/:code/join", (req, res, next) => {
             return res.status(409).json({ error: "A partida já foi iniciada." });
         }
 
-        if (typeof nickname !== "string" || nickname.length < 2 || nickname.length > 30) {
+        if (!isValidNickname(nickname)) {
             return res.status(422).json({
                 error: "O apelido deve ter entre 2 e 30 caracteres."
             });
@@ -250,8 +258,18 @@ router.post("/:code/join", (req, res, next) => {
 
 router.post("/:code/start", (req, res, next) => {
     try {
-        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const code = normalizeGameCode(req.params.code);
         const hostToken = req.get("x-host-token");
+
+        if (!code) {
+            return res.status(422).json({ error: "Código de sala inválido." });
+        }
+
+        if (!isValidToken(hostToken)) {
+            return res.status(401).json({ error: "Token do host inválido." });
+        }
+
+        const game = findGameByCode.get(code);
 
         if (!game) {
             return res.status(404).json({ error: "Sala não encontrada." });
@@ -299,7 +317,13 @@ router.post("/:code/start", (req, res, next) => {
 
 router.get("/:code/current", (req, res, next) => {
     try {
-        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const code = normalizeGameCode(req.params.code);
+
+        if (!code) {
+            return res.status(422).json({ error: "Código de sala inválido." });
+        }
+
+        const game = findGameByCode.get(code);
 
         if (!game) {
             return res.status(404).json({ error: "Sala não encontrada." });
@@ -337,11 +361,25 @@ router.get("/:code/current", (req, res, next) => {
 
 router.post("/:code/answer", (req, res, next) => {
     try {
-        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const code = normalizeGameCode(req.params.code);
         const playerToken = req.get("x-player-token");
         const alternative = typeof req.body.alternative === "string"
             ? req.body.alternative.trim().toUpperCase()
             : "";
+
+        if (!code) {
+            return res.status(422).json({ error: "Código de sala inválido." });
+        }
+
+        if (!isValidToken(playerToken)) {
+            return res.status(401).json({ error: "Token de jogador inválido." });
+        }
+
+        if (!/^[A-E]$/.test(alternative)) {
+            return res.status(422).json({ error: "Alternativa inválida." });
+        }
+
+        const game = findGameByCode.get(code);
 
         if (!game) {
             return res.status(404).json({ error: "Sala não encontrada." });
@@ -411,7 +449,13 @@ router.post("/:code/answer", (req, res, next) => {
 
 router.get("/:code/ranking", (req, res, next) => {
     try {
-        const game = findGameByCode.get(normalizeGameCode(req.params.code));
+        const code = normalizeGameCode(req.params.code);
+
+        if (!code) {
+            return res.status(422).json({ error: "Código de sala inválido." });
+        }
+
+        const game = findGameByCode.get(code);
 
         if (!game) {
             return res.status(404).json({ error: "Sala não encontrada." });
@@ -430,7 +474,7 @@ router.get("/:code/ranking", (req, res, next) => {
 });
 
 function validateGameCreationInput({ hostNickname, year, area, quantity, questionDurationSeconds }) {
-    if (typeof hostNickname !== "string" || hostNickname.trim().length < 2 || hostNickname.trim().length > 30) {
+    if (!isValidNickname(hostNickname)) {
         return "O apelido do host deve ter entre 2 e 30 caracteres.";
     }
 
@@ -501,7 +545,24 @@ function createGameCode() {
 }
 
 function normalizeGameCode(code) {
-    return code.trim().toUpperCase();
+    if (typeof code !== "string") {
+        return null;
+    }
+
+    const normalizedCode = code.trim().toUpperCase();
+
+    return GAME_CODE_PATTERN.test(normalizedCode) ? normalizedCode : null;
+}
+
+function isValidToken(token) {
+    return typeof token === "string" && TOKEN_PATTERN.test(token);
+}
+
+function isValidNickname(nickname) {
+    return typeof nickname === "string" &&
+        nickname.trim().length >= 2 &&
+        nickname.trim().length <= 30 &&
+        !/[\u0000-\u001F\u007F]/.test(nickname);
 }
 
 function handleGameError(error, res, next) {
