@@ -23,6 +23,9 @@ export function initializeDatabase() {
                 CHECK (status IN ('waiting', 'in_progress', 'finished')),
             total_questions INTEGER NOT NULL DEFAULT 0
                 CHECK (total_questions >= 0),
+            selected_year INTEGER,
+            selected_area TEXT,
+            requested_quantity INTEGER,
             question_duration_seconds INTEGER NOT NULL DEFAULT 20
                 CHECK (question_duration_seconds BETWEEN 1 AND 120),
             current_question_position INTEGER NOT NULL DEFAULT 1
@@ -69,16 +72,62 @@ export function initializeDatabase() {
             points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
             question_year INTEGER,
             discipline TEXT,
+            answered_at_ms INTEGER,
+            response_time_ms INTEGER,
             answered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
             FOREIGN KEY (game_question_id) REFERENCES game_questions(id) ON DELETE CASCADE,
             UNIQUE (player_id, game_question_id)
         );
 
+        CREATE TABLE IF NOT EXISTS game_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL,
+            player_id INTEGER,
+            game_question_id INTEGER,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            occurred_at_ms INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE SET NULL,
+            FOREIGN KEY (game_question_id) REFERENCES game_questions(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS player_question_progress (
+            player_id INTEGER NOT NULL,
+            game_question_id INTEGER NOT NULL,
+            presented_at_ms INTEGER NOT NULL,
+            first_viewed_at_ms INTEGER,
+            first_answer_attempt_at_ms INTEGER,
+            answered_at_ms INTEGER,
+            response_time_ms INTEGER,
+            PRIMARY KEY (player_id, game_question_id),
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
+            FOREIGN KEY (game_question_id) REFERENCES game_questions(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS answer_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            game_question_id INTEGER NOT NULL,
+            selected_alternative TEXT,
+            outcome TEXT NOT NULL,
+            attempted_at_ms INTEGER NOT NULL,
+            response_time_ms INTEGER,
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
+            FOREIGN KEY (game_question_id) REFERENCES game_questions(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_players_game_id ON players(game_id);
         CREATE INDEX IF NOT EXISTS idx_game_questions_game_id ON game_questions(game_id);
         CREATE INDEX IF NOT EXISTS idx_answers_player_id ON answers(player_id);
         CREATE INDEX IF NOT EXISTS idx_answers_game_question_id ON answers(game_question_id);
+        CREATE INDEX IF NOT EXISTS idx_game_events_game_id ON game_events(game_id);
+        CREATE INDEX IF NOT EXISTS idx_game_events_player_id ON game_events(player_id);
+        CREATE INDEX IF NOT EXISTS idx_progress_question_id ON player_question_progress(game_question_id);
+        CREATE INDEX IF NOT EXISTS idx_answer_attempts_player_id ON answer_attempts(player_id);
+        CREATE INDEX IF NOT EXISTS idx_answer_attempts_question_id ON answer_attempts(game_question_id);
     `);
 
     addColumnIfMissing("games", "host_token", "host_token TEXT");
@@ -108,10 +157,15 @@ export function initializeDatabase() {
         "question_duration_seconds",
         "question_duration_seconds INTEGER NOT NULL DEFAULT 20"
     );
+    addColumnIfMissing("games", "selected_year", "selected_year INTEGER");
+    addColumnIfMissing("games", "selected_area", "selected_area TEXT");
+    addColumnIfMissing("games", "requested_quantity", "requested_quantity INTEGER");
     addColumnIfMissing("game_questions", "started_at_ms", "started_at_ms INTEGER");
     addColumnIfMissing("game_questions", "ends_at_ms", "ends_at_ms INTEGER");
     addColumnIfMissing("answers", "question_year", "question_year INTEGER");
     addColumnIfMissing("answers", "discipline", "discipline TEXT");
+    addColumnIfMissing("answers", "answered_at_ms", "answered_at_ms INTEGER");
+    addColumnIfMissing("answers", "response_time_ms", "response_time_ms INTEGER");
 
     if (addedCorrectAnswers || addedWrongAnswers) {
         database.exec(`

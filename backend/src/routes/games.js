@@ -35,6 +35,12 @@ const findCurrentQuestion = database.prepare(`
     WHERE game_id = ? AND position = ?
 `);
 
+const findAnswerByPlayerAndQuestion = database.prepare(`
+    SELECT id
+    FROM answers
+    WHERE player_id = ? AND game_question_id = ?
+`);
+
 const findPlayerByToken = database.prepare(`
     SELECT id, nickname, score
     FROM players
@@ -48,6 +54,43 @@ const rankingByGame = database.prepare(`
     ORDER BY score DESC, joined_at ASC, id ASC
 `);
 
+const recordGameEvent = database.prepare(`
+    INSERT INTO game_events (game_id, player_id, game_question_id, event_type, event_data, occurred_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+const recordAnswerAttempt = database.prepare(`
+    INSERT INTO answer_attempts (
+        player_id,
+        game_question_id,
+        selected_alternative,
+        outcome,
+        attempted_at_ms,
+        response_time_ms
+    ) VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+const ensureQuestionProgress = database.prepare(`
+    INSERT OR IGNORE INTO player_question_progress (
+        player_id,
+        game_question_id,
+        presented_at_ms
+    ) VALUES (?, ?, ?)
+`);
+
+const markQuestionViewed = database.prepare(`
+    UPDATE player_question_progress
+    SET first_viewed_at_ms = COALESCE(first_viewed_at_ms, ?)
+    WHERE player_id = ? AND game_question_id = ?
+`);
+
+const markQuestionAttempted = database.prepare(`
+    UPDATE player_question_progress
+    SET first_viewed_at_ms = COALESCE(first_viewed_at_ms, ?),
+        first_answer_attempt_at_ms = COALESCE(first_answer_attempt_at_ms, ?)
+    WHERE player_id = ? AND game_question_id = ?
+`);
+
 const saveAnswer = database.transaction(({
     playerId,
     gameQuestionId,
@@ -55,7 +98,9 @@ const saveAnswer = database.transaction(({
     isCorrect,
     points,
     questionYear,
-    discipline
+    discipline,
+    answeredAtMs,
+    responseTimeMs
 }) => {
     database.prepare(`
         INSERT INTO answers (
@@ -65,8 +110,10 @@ const saveAnswer = database.transaction(({
             is_correct,
             points,
             question_year,
-            discipline
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            discipline,
+            answered_at_ms,
+            response_time_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         playerId,
         gameQuestionId,
@@ -74,7 +121,9 @@ const saveAnswer = database.transaction(({
         Number(isCorrect),
         points,
         questionYear,
-        discipline
+        discipline,
+        answeredAtMs,
+        responseTimeMs
     );
 
     database.prepare(`
@@ -85,10 +134,33 @@ const saveAnswer = database.transaction(({
         WHERE id = ?
     `).run(points, Number(isCorrect), Number(!isCorrect), playerId);
 
+    recordAnswerAttempt.run(
+        playerId,
+        gameQuestionId,
+        alternative,
+        "accepted",
+        answeredAtMs,
+        responseTimeMs
+    );
+
+    markQuestionAttempted.run(answeredAtMs, answeredAtMs, playerId, gameQuestionId);
+    database.prepare(`
+        UPDATE player_question_progress
+        SET answered_at_ms = ?, response_time_ms = ?
+        WHERE player_id = ? AND game_question_id = ?
+    `).run(answeredAtMs, responseTimeMs, playerId, gameQuestionId);
+
     return database.prepare("SELECT score FROM players WHERE id = ?").get(playerId).score;
 });
 
-const createGame = database.transaction(({ hostNickname, questions, questionDurationSeconds }) => {
+const createGame = database.transaction(({
+    hostNickname,
+    questions,
+    questionDurationSeconds,
+    selectedYear,
+    selectedArea,
+    requestedQuantity
+}) => {
     let game;
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -97,9 +169,24 @@ const createGame = database.transaction(({ hostNickname, questions, questionDura
 
         try {
             const result = database.prepare(`
-                INSERT INTO games (code, host_token, total_questions, question_duration_seconds)
-                VALUES (?, ?, ?, ?)
-            `).run(code, hostToken, questions.length, questionDurationSeconds);
+                INSERT INTO games (
+                    code,
+                    host_token,
+                    total_questions,
+                    question_duration_seconds,
+                    selected_year,
+                    selected_area,
+                    requested_quantity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                code,
+                hostToken,
+                questions.length,
+                questionDurationSeconds,
+                selectedYear,
+                selectedArea,
+                requestedQuantity
+            );
 
             game = {
                 id: result.lastInsertRowid,
@@ -147,6 +234,20 @@ const createGame = database.transaction(({ hostNickname, questions, questionDura
             question.correctAlternative
         );
     });
+
+    recordGameEvent.run(
+        game.id,
+        Number(hostPlayerResult.lastInsertRowid),
+        null,
+        "game_created",
+        JSON.stringify({
+            year: selectedYear,
+            area: selectedArea,
+            requestedQuantity,
+            questionDurationSeconds
+        }),
+        Date.now()
+    );
 
     return {
         code: game.code,
@@ -199,7 +300,10 @@ router.post("/", async (req, res, next) => {
         const game = createGame({
             hostNickname: hostNickname.trim(),
             questions,
-            questionDurationSeconds: Number(questionDurationSeconds)
+            questionDurationSeconds: Number(questionDurationSeconds),
+            selectedYear: Number(year),
+            selectedArea: normalizedArea || null,
+            requestedQuantity: Number(quantity)
         });
 
         return res.status(201).json({
@@ -258,6 +362,15 @@ router.post("/:code/join", (req, res, next) => {
             INSERT INTO players (game_id, nickname, player_token)
             VALUES (?, ?, ?)
         `).run(game.id, nickname, playerToken);
+
+        recordGameEvent.run(
+            game.id,
+            Number(result.lastInsertRowid),
+            null,
+            "player_joined",
+            null,
+            Date.now()
+        );
 
         return res.status(201).json({
             player: {
@@ -319,6 +432,31 @@ router.post("/:code/start", (req, res, next) => {
                 SET started_at_ms = ?, ends_at_ms = ?
                 WHERE game_id = ? AND position = ?
             `).run(questionStartedAtMs, questionEndsAtMs, game.id, game.current_question_position);
+
+            const currentQuestion = findCurrentQuestion.get(
+                game.id,
+                game.current_question_position
+            );
+
+            database.prepare(`
+                INSERT OR IGNORE INTO player_question_progress (
+                    player_id,
+                    game_question_id,
+                    presented_at_ms
+                )
+                SELECT id, ?, ?
+                FROM players
+                WHERE game_id = ?
+            `).run(currentQuestion.id, questionStartedAtMs, game.id);
+
+            recordGameEvent.run(
+                game.id,
+                null,
+                currentQuestion.id,
+                "question_started",
+                JSON.stringify({ position: currentQuestion.position }),
+                questionStartedAtMs
+            );
         })();
 
         return res.status(200).json({
@@ -360,10 +498,27 @@ router.get("/:code/current", (req, res, next) => {
             return res.status(409).json({ error: "Não existe uma questão ativa nesta partida." });
         }
 
-        const answeredAtMs = Date.now();
+        const nowMs = Date.now();
 
-        if (isQuestionExpired(currentQuestion, answeredAtMs)) {
+        if (isQuestionExpired(currentQuestion, nowMs)) {
             return res.status(409).json({ error: "O tempo desta questão terminou." });
+        }
+
+        const playerToken = req.get("x-player-token");
+
+        if (playerToken) {
+            if (!isValidToken(playerToken)) {
+                return res.status(401).json({ error: "Token de jogador inválido." });
+            }
+
+            const player = findPlayerByToken.get(game.id, playerToken);
+
+            if (!player) {
+                return res.status(401).json({ error: "Token de jogador inválido." });
+            }
+
+            ensureQuestionProgress.run(player.id, currentQuestion.id, currentQuestion.started_at_ms);
+            markQuestionViewed.run(nowMs, player.id, currentQuestion.id);
         }
 
         return res.status(200).json({
@@ -396,10 +551,6 @@ router.post("/:code/answer", (req, res, next) => {
             return res.status(401).json({ error: "Token de jogador inválido." });
         }
 
-        if (!/^[A-E]$/.test(alternative)) {
-            return res.status(422).json({ error: "Alternativa inválida." });
-        }
-
         const game = findGameByCode.get(code);
 
         if (!game) {
@@ -423,9 +574,71 @@ router.post("/:code/answer", (req, res, next) => {
         }
 
         const answeredAtMs = Date.now();
+        const responseTimeMs = Math.max(
+            0,
+            answeredAtMs - currentQuestion.started_at_ms
+        );
+
+        ensureQuestionProgress.run(
+            player.id,
+            currentQuestion.id,
+            currentQuestion.started_at_ms
+        );
 
         if (isQuestionExpired(currentQuestion, answeredAtMs)) {
+            recordAnswerAttempt.run(
+                player.id,
+                currentQuestion.id,
+                alternative || null,
+                "expired",
+                answeredAtMs,
+                responseTimeMs
+            );
+            markQuestionAttempted.run(
+                answeredAtMs,
+                answeredAtMs,
+                player.id,
+                currentQuestion.id
+            );
             return res.status(409).json({ error: "O tempo desta questão terminou." });
+        }
+
+        if (!/^[A-E]$/.test(alternative)) {
+            recordAnswerAttempt.run(
+                player.id,
+                currentQuestion.id,
+                alternative || null,
+                "invalid_alternative",
+                answeredAtMs,
+                responseTimeMs
+            );
+            markQuestionAttempted.run(
+                answeredAtMs,
+                answeredAtMs,
+                player.id,
+                currentQuestion.id
+            );
+            return res.status(422).json({ error: "Alternativa inválida." });
+        }
+
+        if (findAnswerByPlayerAndQuestion.get(player.id, currentQuestion.id)) {
+            recordAnswerAttempt.run(
+                player.id,
+                currentQuestion.id,
+                alternative,
+                "duplicate",
+                answeredAtMs,
+                responseTimeMs
+            );
+            markQuestionAttempted.run(
+                answeredAtMs,
+                answeredAtMs,
+                player.id,
+                currentQuestion.id
+            );
+            return res.status(409).json({
+                error: "Você já respondeu a questão atual."
+            });
         }
 
         const question = JSON.parse(currentQuestion.question_data);
@@ -434,6 +647,20 @@ router.post("/:code/answer", (req, res, next) => {
         );
 
         if (!alternativeExists) {
+            recordAnswerAttempt.run(
+                player.id,
+                currentQuestion.id,
+                alternative,
+                "invalid_alternative",
+                answeredAtMs,
+                responseTimeMs
+            );
+            markQuestionAttempted.run(
+                answeredAtMs,
+                answeredAtMs,
+                player.id,
+                currentQuestion.id
+            );
             return res.status(422).json({ error: "Alternativa inválida para esta questão." });
         }
 
@@ -451,7 +678,9 @@ router.post("/:code/answer", (req, res, next) => {
             isCorrect,
             points,
             questionYear: currentQuestion.question_year,
-            discipline: currentQuestion.discipline
+            discipline: currentQuestion.discipline,
+            answeredAtMs,
+            responseTimeMs
         });
 
         return res.status(201).json({
