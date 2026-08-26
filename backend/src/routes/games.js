@@ -318,7 +318,7 @@ router.get("/:code/current", (req, res, next) => {
         const answeredAtMs = Date.now();
 
         if (isQuestionExpired(currentQuestion, answeredAtMs)) {
-            return res.status(409).json({ error: "O tempo desta quest\u00e3o terminou." });
+            return res.status(409).json({ error: "O tempo desta questão terminou." });
         }
 
         return res.status(200).json({
@@ -366,7 +366,7 @@ router.post("/:code/answer", (req, res, next) => {
         const answeredAtMs = Date.now();
 
         if (isQuestionExpired(currentQuestion, answeredAtMs)) {
-            return res.status(409).json({ error: "O tempo desta quest\u00e3o terminou." });
+            return res.status(409).json({ error: "O tempo desta questão terminou." });
         }
 
         const question = JSON.parse(currentQuestion.question_data);
@@ -455,7 +455,7 @@ function validateGameCreationInput({ hostNickname, year, area, quantity, questio
         Number(questionDurationSeconds) < MIN_QUESTION_DURATION_SECONDS ||
         Number(questionDurationSeconds) > MAX_QUESTION_DURATION_SECONDS
     ) {
-        return `A duraÃ§Ã£o por questÃ£o deve ser um nÃºmero inteiro entre ${MIN_QUESTION_DURATION_SECONDS} e ${MAX_QUESTION_DURATION_SECONDS} segundos.`;
+        return `A duração por questão deve ser um número inteiro entre ${MIN_QUESTION_DURATION_SECONDS} e ${MAX_QUESTION_DURATION_SECONDS} segundos.`;
     }
 
     return null;
