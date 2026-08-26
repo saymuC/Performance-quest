@@ -23,6 +23,8 @@ export function initializeDatabase() {
                 CHECK (status IN ('waiting', 'in_progress', 'finished')),
             total_questions INTEGER NOT NULL DEFAULT 0
                 CHECK (total_questions >= 0),
+            question_duration_seconds INTEGER NOT NULL DEFAULT 20
+                CHECK (question_duration_seconds BETWEEN 1 AND 120),
             current_question_position INTEGER NOT NULL DEFAULT 1
                 CHECK (current_question_position >= 1),
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -50,6 +52,8 @@ export function initializeDatabase() {
             discipline TEXT NOT NULL,
             question_data TEXT NOT NULL,
             correct_alternative TEXT NOT NULL,
+            started_at_ms INTEGER,
+            ends_at_ms INTEGER,
             FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
             UNIQUE (game_id, position)
         );
@@ -85,6 +89,13 @@ export function initializeDatabase() {
         "external_question_index",
         "external_question_index INTEGER"
     );
+    addColumnIfMissing(
+        "games",
+        "question_duration_seconds",
+        "question_duration_seconds INTEGER NOT NULL DEFAULT 20"
+    );
+    addColumnIfMissing("game_questions", "started_at_ms", "started_at_ms INTEGER");
+    addColumnIfMissing("game_questions", "ends_at_ms", "ends_at_ms INTEGER");
 
     database.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_games_host_token

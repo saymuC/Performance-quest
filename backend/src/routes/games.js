@@ -12,16 +12,22 @@ import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
 const MAX_QUESTIONS_PER_GAME = 50;
+const DEFAULT_QUESTION_DURATION_SECONDS = 20;
+const MIN_QUESTION_DURATION_SECONDS = 1;
+const MAX_QUESTION_DURATION_SECONDS = 120;
+const MAX_POINTS_PER_CORRECT_ANSWER = 1000;
+const MIN_POINTS_PER_CORRECT_ANSWER = 100;
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const findGameByCode = database.prepare(`
-    SELECT id, code, host_token, status, total_questions, current_question_position, created_at, started_at
+    SELECT id, code, host_token, status, total_questions, question_duration_seconds,
+           current_question_position, created_at, started_at
     FROM games
     WHERE code = ?
 `);
 
 const findCurrentQuestion = database.prepare(`
-    SELECT id, position, question_data, correct_alternative
+    SELECT id, position, question_data, correct_alternative, started_at_ms, ends_at_ms
     FROM game_questions
     WHERE game_id = ? AND position = ?
 `);
@@ -59,7 +65,7 @@ const saveAnswer = database.transaction(({ playerId, gameQuestionId, alternative
     return database.prepare("SELECT score FROM players WHERE id = ?").get(playerId).score;
 });
 
-const createGame = database.transaction(({ hostNickname, questions }) => {
+const createGame = database.transaction(({ hostNickname, questions, questionDurationSeconds }) => {
     let game;
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -68,9 +74,9 @@ const createGame = database.transaction(({ hostNickname, questions }) => {
 
         try {
             const result = database.prepare(`
-                INSERT INTO games (code, host_token, total_questions)
-                VALUES (?, ?, ?)
-            `).run(code, hostToken, questions.length);
+                INSERT INTO games (code, host_token, total_questions, question_duration_seconds)
+                VALUES (?, ?, ?, ?)
+            `).run(code, hostToken, questions.length, questionDurationSeconds);
 
             game = {
                 id: result.lastInsertRowid,
@@ -130,8 +136,20 @@ const createGame = database.transaction(({ hostNickname, questions }) => {
 
 router.post("/", async (req, res, next) => {
     try {
-        const { hostNickname, year, area, quantity = 10 } = req.body;
-        const validationError = validateGameCreationInput({ hostNickname, year, area, quantity });
+        const {
+            hostNickname,
+            year,
+            area,
+            quantity = 10,
+            questionDurationSeconds = DEFAULT_QUESTION_DURATION_SECONDS
+        } = req.body;
+        const validationError = validateGameCreationInput({
+            hostNickname,
+            year,
+            area,
+            quantity,
+            questionDurationSeconds
+        });
 
         if (validationError) {
             return res.status(422).json({ error: validationError });
@@ -157,14 +175,16 @@ router.post("/", async (req, res, next) => {
 
         const game = createGame({
             hostNickname: hostNickname.trim(),
-            questions
+            questions,
+            questionDurationSeconds: Number(questionDurationSeconds)
         });
 
         return res.status(201).json({
             game: {
                 code: game.code,
                 status: "waiting",
-                totalQuestions: game.totalQuestions
+                totalQuestions: game.totalQuestions,
+                questionDurationSeconds: Number(questionDurationSeconds)
             },
             host: {
                 playerId: game.hostPlayerId,
@@ -245,17 +265,31 @@ router.post("/:code/start", (req, res, next) => {
             return res.status(409).json({ error: "A partida já foi iniciada." });
         }
 
-        database.prepare(`
+        const questionStartedAtMs = Date.now();
+        const questionEndsAtMs = questionStartedAtMs + (game.question_duration_seconds * 1000);
+
+        database.transaction(() => {
+            database.prepare(`
             UPDATE games
             SET status = 'in_progress', started_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        `).run(game.id);
+            `).run(game.id);
+
+            database.prepare(`
+                UPDATE game_questions
+                SET started_at_ms = ?, ends_at_ms = ?
+                WHERE game_id = ? AND position = ?
+            `).run(questionStartedAtMs, questionEndsAtMs, game.id, game.current_question_position);
+        })();
 
         return res.status(200).json({
             game: {
                 code: game.code,
                 status: "in_progress",
-                totalQuestions: game.total_questions
+                totalQuestions: game.total_questions,
+                questionDurationSeconds: game.question_duration_seconds,
+                questionStartedAt: questionStartedAtMs,
+                questionEndsAt: questionEndsAtMs
             }
         });
     } catch (error) {
@@ -281,10 +315,20 @@ router.get("/:code/current", (req, res, next) => {
             return res.status(409).json({ error: "Não existe uma questão ativa nesta partida." });
         }
 
+        const answeredAtMs = Date.now();
+
+        if (isQuestionExpired(currentQuestion, answeredAtMs)) {
+            return res.status(409).json({ error: "O tempo desta quest\u00e3o terminou." });
+        }
+
         return res.status(200).json({
             question: JSON.parse(currentQuestion.question_data),
             position: currentQuestion.position,
-            totalQuestions: game.total_questions
+            totalQuestions: game.total_questions,
+            questionDurationSeconds: game.question_duration_seconds,
+            questionStartedAt: currentQuestion.started_at_ms,
+            questionEndsAt: currentQuestion.ends_at_ms,
+            remainingTimeMs: Math.max(0, currentQuestion.ends_at_ms - Date.now())
         });
     } catch (error) {
         return handleGameError(error, res, next);
@@ -319,6 +363,12 @@ router.post("/:code/answer", (req, res, next) => {
             return res.status(409).json({ error: "Não existe uma questão ativa nesta partida." });
         }
 
+        const answeredAtMs = Date.now();
+
+        if (isQuestionExpired(currentQuestion, answeredAtMs)) {
+            return res.status(409).json({ error: "O tempo desta quest\u00e3o terminou." });
+        }
+
         const question = JSON.parse(currentQuestion.question_data);
         const alternativeExists = question.alternatives.some(
             (currentAlternative) => currentAlternative.letter === alternative
@@ -329,7 +379,12 @@ router.post("/:code/answer", (req, res, next) => {
         }
 
         const isCorrect = alternative === currentQuestion.correct_alternative;
-        const points = isCorrect ? 1000 : 0;
+        const points = calculatePoints({
+            isCorrect,
+            startedAtMs: currentQuestion.started_at_ms,
+            endsAtMs: currentQuestion.ends_at_ms,
+            answeredAtMs
+        });
         const totalScore = saveAnswer({
             playerId: player.id,
             gameQuestionId: currentQuestion.id,
@@ -374,7 +429,7 @@ router.get("/:code/ranking", (req, res, next) => {
     }
 });
 
-function validateGameCreationInput({ hostNickname, year, area, quantity }) {
+function validateGameCreationInput({ hostNickname, year, area, quantity, questionDurationSeconds }) {
     if (typeof hostNickname !== "string" || hostNickname.trim().length < 2 || hostNickname.trim().length > 30) {
         return "O apelido do host deve ter entre 2 e 30 caracteres.";
     }
@@ -395,7 +450,35 @@ function validateGameCreationInput({ hostNickname, year, area, quantity }) {
         return `A quantidade deve ser um número inteiro entre 1 e ${MAX_QUESTIONS_PER_GAME}.`;
     }
 
+    if (
+        !Number.isInteger(Number(questionDurationSeconds)) ||
+        Number(questionDurationSeconds) < MIN_QUESTION_DURATION_SECONDS ||
+        Number(questionDurationSeconds) > MAX_QUESTION_DURATION_SECONDS
+    ) {
+        return `A duraÃ§Ã£o por questÃ£o deve ser um nÃºmero inteiro entre ${MIN_QUESTION_DURATION_SECONDS} e ${MAX_QUESTION_DURATION_SECONDS} segundos.`;
+    }
+
     return null;
+}
+
+function isQuestionExpired(question, now = Date.now()) {
+    return !Number.isInteger(question.started_at_ms) ||
+        !Number.isInteger(question.ends_at_ms) ||
+        now >= question.ends_at_ms;
+}
+
+function calculatePoints({ isCorrect, startedAtMs, endsAtMs, answeredAtMs }) {
+    if (!isCorrect) {
+        return 0;
+    }
+
+    const durationMs = endsAtMs - startedAtMs;
+    const remainingMs = Math.max(0, endsAtMs - answeredAtMs);
+    const variablePoints = MAX_POINTS_PER_CORRECT_ANSWER - MIN_POINTS_PER_CORRECT_ANSWER;
+
+    return MIN_POINTS_PER_CORRECT_ANSWER + Math.floor(
+        (variablePoints * remainingMs) / durationMs
+    );
 }
 
 function shuffleQuestions(questions) {
