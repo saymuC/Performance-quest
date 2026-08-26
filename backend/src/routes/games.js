@@ -29,7 +29,8 @@ const findGameByCode = database.prepare(`
 `);
 
 const findCurrentQuestion = database.prepare(`
-    SELECT id, position, question_data, correct_alternative, started_at_ms, ends_at_ms
+    SELECT id, position, question_data, correct_alternative, question_year, discipline,
+           started_at_ms, ends_at_ms
     FROM game_questions
     WHERE game_id = ? AND position = ?
 `);
@@ -47,22 +48,42 @@ const rankingByGame = database.prepare(`
     ORDER BY score DESC, joined_at ASC, id ASC
 `);
 
-const saveAnswer = database.transaction(({ playerId, gameQuestionId, alternative, isCorrect, points }) => {
+const saveAnswer = database.transaction(({
+    playerId,
+    gameQuestionId,
+    alternative,
+    isCorrect,
+    points,
+    questionYear,
+    discipline
+}) => {
     database.prepare(`
         INSERT INTO answers (
             player_id,
             game_question_id,
             selected_alternative,
             is_correct,
-            points
-        ) VALUES (?, ?, ?, ?, ?)
-    `).run(playerId, gameQuestionId, alternative, Number(isCorrect), points);
+            points,
+            question_year,
+            discipline
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        playerId,
+        gameQuestionId,
+        alternative,
+        Number(isCorrect),
+        points,
+        questionYear,
+        discipline
+    );
 
     database.prepare(`
         UPDATE players
-        SET score = score + ?
+        SET score = score + ?,
+            correct_answers = correct_answers + ?,
+            wrong_answers = wrong_answers + ?
         WHERE id = ?
-    `).run(points, playerId);
+    `).run(points, Number(isCorrect), Number(!isCorrect), playerId);
 
     return database.prepare("SELECT score FROM players WHERE id = ?").get(playerId).score;
 });
@@ -428,7 +449,9 @@ router.post("/:code/answer", (req, res, next) => {
             gameQuestionId: currentQuestion.id,
             alternative,
             isCorrect,
-            points
+            points,
+            questionYear: currentQuestion.question_year,
+            discipline: currentQuestion.discipline
         });
 
         return res.status(201).json({

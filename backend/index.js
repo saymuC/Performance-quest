@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import gamesRouter from "./src/routes/games.js";
 import questionsRouter from "./src/routes/questions.js";
+import statsRouter from "./src/routes/stats.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
@@ -81,6 +82,7 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api/questions", questionsRouter);
 app.use("/api/games", gamesRouter);
+app.use("/api/stats", statsRouter);
 
 app.get("/", (req, res) => {
     res.json({

@@ -38,6 +38,8 @@ export function initializeDatabase() {
             nickname TEXT NOT NULL COLLATE NOCASE,
             player_token TEXT,
             score INTEGER NOT NULL DEFAULT 0 CHECK (score >= 0),
+            correct_answers INTEGER NOT NULL DEFAULT 0 CHECK (correct_answers >= 0),
+            wrong_answers INTEGER NOT NULL DEFAULT 0 CHECK (wrong_answers >= 0),
             joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
             UNIQUE (game_id, nickname)
@@ -65,6 +67,8 @@ export function initializeDatabase() {
             selected_alternative TEXT NOT NULL,
             is_correct INTEGER NOT NULL CHECK (is_correct IN (0, 1)),
             points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+            question_year INTEGER,
+            discipline TEXT,
             answered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
             FOREIGN KEY (game_question_id) REFERENCES game_questions(id) ON DELETE CASCADE,
@@ -84,6 +88,16 @@ export function initializeDatabase() {
         "current_question_position INTEGER NOT NULL DEFAULT 1"
     );
     addColumnIfMissing("players", "player_token", "player_token TEXT");
+    const addedCorrectAnswers = addColumnIfMissing(
+        "players",
+        "correct_answers",
+        "correct_answers INTEGER NOT NULL DEFAULT 0"
+    );
+    const addedWrongAnswers = addColumnIfMissing(
+        "players",
+        "wrong_answers",
+        "wrong_answers INTEGER NOT NULL DEFAULT 0"
+    );
     addColumnIfMissing(
         "game_questions",
         "external_question_index",
@@ -96,6 +110,39 @@ export function initializeDatabase() {
     );
     addColumnIfMissing("game_questions", "started_at_ms", "started_at_ms INTEGER");
     addColumnIfMissing("game_questions", "ends_at_ms", "ends_at_ms INTEGER");
+    addColumnIfMissing("answers", "question_year", "question_year INTEGER");
+    addColumnIfMissing("answers", "discipline", "discipline TEXT");
+
+    if (addedCorrectAnswers || addedWrongAnswers) {
+        database.exec(`
+            UPDATE players
+            SET correct_answers = (
+                    SELECT COUNT(*)
+                    FROM answers
+                    WHERE answers.player_id = players.id AND answers.is_correct = 1
+                ),
+                wrong_answers = (
+                    SELECT COUNT(*)
+                    FROM answers
+                    WHERE answers.player_id = players.id AND answers.is_correct = 0
+                )
+        `);
+    }
+
+    database.exec(`
+        UPDATE answers
+        SET question_year = (
+                SELECT question_year
+                FROM game_questions
+                WHERE game_questions.id = answers.game_question_id
+            ),
+            discipline = (
+                SELECT discipline
+                FROM game_questions
+                WHERE game_questions.id = answers.game_question_id
+            )
+        WHERE question_year IS NULL OR discipline IS NULL
+    `);
 
     database.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_games_host_token
@@ -111,7 +158,10 @@ function addColumnIfMissing(table, column, definition) {
 
     if (!columnExists) {
         database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+        return true;
     }
+
+    return false;
 }
 
 initializeDatabase();
