@@ -111,9 +111,13 @@ app.use((error, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`Servidor rodando em http://localhost:${PORT}`);
-});
+export { app };
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    app.listen(PORT, () => {
+        console.log(`Servidor rodando em http://localhost:${PORT}`);
+    });
+}
 
 function parsePositiveInteger(value, fallback) {
     const parsedValue = Number(value);

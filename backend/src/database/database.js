@@ -4,7 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const databasePath = path.resolve(__dirname, "../data/banco.db");
+const databasePath = process.env.DATABASE_PATH
+    ? path.resolve(process.env.DATABASE_PATH)
+    : path.resolve(__dirname, "../data/banco.db");
 
 mkdirSync(path.dirname(databasePath), { recursive: true });
 

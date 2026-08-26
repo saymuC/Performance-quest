@@ -4,3 +4,4 @@ backend/src/data/*.db
 backend/src/data/*.db-shm
 backend/src/data/*.db-wal
 scripts/
+tests/

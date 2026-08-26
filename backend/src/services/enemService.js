@@ -1,4 +1,4 @@
-const ENEM_API_URL = "https://api.enem.dev/v1";
+const ENEM_API_URL = process.env.ENEM_API_URL;
 
 export class EnemApiUnavailableError extends Error {
     constructor() {
