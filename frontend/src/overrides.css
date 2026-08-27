@@ -1,0 +1,83 @@
+.profile-photo {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border: 3px solid #10231e;
+  border-radius: 50%;
+  box-shadow: 3px 3px 0 #ff6a3d;
+}
+
+#profile-preview {
+  display: block;
+  width: 180px;
+  height: 180px;
+  margin: 0 auto 8px;
+  border-width: 4px;
+  box-shadow: 5px 5px 0 #ff6a3d;
+}
+
+#profile-form label:has(#profile-file) {
+  display: inline-flex;
+  width: max-content;
+  padding: 10px 14px;
+  border: 2px solid #10231e;
+  background: #d8ff54;
+  color: #10231e;
+  cursor: pointer;
+  font: 700 12px "DM Mono", monospace;
+  text-transform: uppercase;
+}
+
+#profile-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+#profile-form label:has(#profile-file)::before {
+  content: "Selecionar foto";
+  font-size: 13px;
+}
+
+#profile-form label:has(#profile-file) {
+  font-size: 0;
+}
+
+.people {
+  width: min(520px, 100%);
+  margin: 22px auto;
+  text-align: left;
+  border-top: 1px solid #cad0bd;
+}
+
+.people h3 {
+  margin: 10px 0;
+  color: #61716b;
+  font: 11px "DM Mono", monospace;
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  border-bottom: 1px solid #cad0bd;
+  font-size: 15px;
+}
+
+.person img {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #10231e;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.person small {
+  margin-left: auto;
+  padding: 2px 5px;
+  background: #d8ff54;
+  font: 9px "DM Mono", monospace;
+}

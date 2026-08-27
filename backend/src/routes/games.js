@@ -11,7 +11,7 @@ import { findProhibitedTerm } from "../utils/nicknameModeration.js";
 import { sanitizeQuestion } from "../utils/sanitizeQuestions.js";
 
 const router = express.Router();
-const MAX_QUESTIONS_PER_GAME = 50;
+const MAX_QUESTIONS_PER_GAME = 30;
 const DEFAULT_QUESTION_DURATION_SECONDS = 20;
 const MIN_QUESTION_DURATION_SECONDS = 1;
 const MAX_QUESTION_DURATION_SECONDS = 120;
@@ -155,6 +155,7 @@ const saveAnswer = database.transaction(({
 
 const createGame = database.transaction(({
     hostNickname,
+    hostProfileImage,
     questions,
     questionDurationSeconds,
     selectedYear,
@@ -207,9 +208,9 @@ const createGame = database.transaction(({
 
     const hostPlayerToken = randomUUID();
     const hostPlayerResult = database.prepare(`
-        INSERT INTO players (game_id, nickname, player_token)
-        VALUES (?, ?, ?)
-    `).run(game.id, hostNickname, hostPlayerToken);
+        INSERT INTO players (game_id, nickname, player_token, profile_image)
+        VALUES (?, ?, ?, ?)
+    `).run(game.id, hostNickname, hostPlayerToken, hostProfileImage);
 
     const insertQuestion = database.prepare(`
         INSERT INTO game_questions (
@@ -279,17 +280,15 @@ router.post("/", async (req, res, next) => {
             return res.status(422).json({ error: validationError });
         }
 
-        const data = await getQuestions(Number(year));
         const normalizedArea = area?.trim().toLowerCase();
-        let questions = data.questions;
-
-        if (normalizedArea) {
-            questions = questions.filter((question) =>
-                question.discipline.toLowerCase() === normalizedArea
-            );
+        if (process.env.HOST_PASSWORD && req.get("x-host-password") !== process.env.HOST_PASSWORD) {
+            return res.status(401).json({ error: "Senha do host inválida." });
         }
-
-        questions = shuffleQuestions(questions).slice(0, Number(quantity));
+        const questions = await collectQuestions({
+            year: Number(year),
+            area: normalizedArea,
+            quantity: Number(quantity)
+        });
 
         if (questions.length === 0) {
             return res.status(422).json({
@@ -299,6 +298,7 @@ router.post("/", async (req, res, next) => {
 
         const game = createGame({
             hostNickname: hostNickname.trim(),
+            hostProfileImage: normalizeProfileImage(req.body.profileImage),
             questions,
             questionDurationSeconds: Number(questionDurationSeconds),
             selectedYear: Number(year),
@@ -357,11 +357,15 @@ router.post("/:code/join", (req, res, next) => {
             });
         }
 
+        const profileImage = normalizeProfileImage(req.body.profileImage);
+        if (req.body.profileImage !== undefined && !profileImage) {
+            return res.status(422).json({ error: "Imagem de perfil inválida ou muito grande." });
+        }
         const playerToken = randomUUID();
         const result = database.prepare(`
-            INSERT INTO players (game_id, nickname, player_token)
-            VALUES (?, ?, ?)
-        `).run(game.id, nickname, playerToken);
+            INSERT INTO players (game_id, nickname, player_token, profile_image)
+            VALUES (?, ?, ?, ?)
+        `).run(game.id, nickname, playerToken, profileImage);
 
         recordGameEvent.run(
             game.id,
@@ -376,7 +380,8 @@ router.post("/:code/join", (req, res, next) => {
             player: {
                 id: Number(result.lastInsertRowid),
                 nickname,
-                playerToken
+                playerToken,
+                profileImage
             }
         });
     } catch (error) {
@@ -469,6 +474,52 @@ router.post("/:code/start", (req, res, next) => {
                 questionEndsAt: questionEndsAtMs
             }
         });
+    } catch (error) {
+        return handleGameError(error, res, next);
+    }
+});
+
+router.post("/validate-nickname", (req, res) => {
+    const nickname = typeof req.body.nickname === "string" ? req.body.nickname.trim() : "";
+    if (!isValidNickname(nickname)) {
+        return res.status(422).json({ error: "O apelido deve ter pelo menos 2 letras." });
+    }
+    if (findProhibitedTerm(nickname)) {
+        return res.status(422).json({ error: "Escolha outro apelido." });
+    }
+    return res.status(204).end();
+});
+
+router.post("/:code/leave", (req, res, next) => {
+    try {
+        const code = normalizeGameCode(req.params.code);
+        const playerToken = req.get("x-player-token");
+        const game = code && findGameByCode.get(code);
+        if (!game) return res.status(404).json({ error: "Sala não encontrada." });
+        if (!isValidToken(playerToken)) return res.status(401).json({ error: "Token de jogador inválido." });
+        const player = findPlayerByToken.get(game.id, playerToken);
+        if (!player) return res.status(401).json({ error: "Token de jogador inválido." });
+        if (playerToken === game.host_token) return res.status(409).json({ error: "O host não pode sair da própria sala." });
+        database.prepare("DELETE FROM players WHERE id = ?").run(player.id);
+        return res.status(204).end();
+    } catch (error) {
+        return handleGameError(error, res, next);
+    }
+});
+
+router.post("/:code/close", (req, res, next) => {
+    try {
+        const code = normalizeGameCode(req.params.code);
+        const hostToken = req.get("x-host-token");
+        const game = code && findGameByCode.get(code);
+
+        if (!game) return res.status(404).json({ error: "Sala não encontrada." });
+        if (!isValidToken(hostToken) || hostToken !== game.host_token) {
+            return res.status(403).json({ error: "Apenas o host pode fechar a sala." });
+        }
+
+        database.prepare("DELETE FROM games WHERE id = ?").run(game.id);
+        return res.status(204).end();
     } catch (error) {
         return handleGameError(error, res, next);
     }
@@ -719,7 +770,15 @@ router.get("/:code/ranking", (req, res, next) => {
             score: player.score
         }));
 
-        return res.status(200).json({ ranking });
+        const players = database.prepare(`
+            SELECT nickname, profile_image, player_token = ? AS is_host
+            FROM players WHERE game_id = ? ORDER BY joined_at ASC, id ASC
+        `).all(game.host_token, game.id).map((player) => ({
+            nickname: player.nickname,
+            profileImage: player.profile_image,
+            isHost: Boolean(player.is_host)
+        }));
+        return res.status(200).json({ ranking, players, status: game.status });
     } catch (error) {
         return handleGameError(error, res, next);
     }
@@ -788,6 +847,20 @@ function shuffleQuestions(questions) {
     return shuffled;
 }
 
+async function collectQuestions({ year, area, quantity }) {
+    const questions = [];
+
+    for (let currentYear = year; currentYear >= 2009 && questions.length < quantity; currentYear -= 1) {
+        const data = await getQuestions(currentYear);
+        const compatible = area
+            ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
+            : data.questions;
+        questions.push(...shuffleQuestions(compatible));
+    }
+
+    return questions.slice(0, quantity);
+}
+
 function createGameCode() {
     const randomValues = randomBytes(6);
 
@@ -810,10 +883,18 @@ function isValidToken(token) {
     return typeof token === "string" && TOKEN_PATTERN.test(token);
 }
 
+function normalizeProfileImage(value) {
+    return typeof value === "string" &&
+        /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(value) &&
+        value.length <= 180_000
+        ? value
+        : null;
+}
+
 function isValidNickname(nickname) {
     return typeof nickname === "string" &&
         nickname.trim().length >= 2 &&
-        nickname.trim().length <= 30 &&
+        /[A-Za-zÀ-ÿ]/.test(nickname) &&
         !/[\u0000-\u001F\u007F]/.test(nickname);
 }
 

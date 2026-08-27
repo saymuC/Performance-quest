@@ -1,0 +1,37 @@
+#profile-form label:has(#profile-file) {
+  align-self: center;
+  min-width: 180px;
+  min-height: 48px;
+  justify-content: center;
+  align-items: center;
+  justify-self: center;
+}
+
+.leave {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  margin: 12px 6px !important;
+  padding: 0 16px !important;
+  border: 1px solid #10231e !important;
+  background: #fffdf7 !important;
+  color: #10231e !important;
+  font-weight: 800 !important;
+}
+
+.qr-code {
+  display: block;
+  width: min(320px, 86vw);
+  margin: 24px auto;
+  padding: 10px;
+  border: 3px solid #10231e;
+  border-radius: 24px;
+  background: #fff;
+}
+
+.person small {
+  border: 1px solid #10231e;
+  border-radius: 999px;
+  background: #d8ff54;
+}
