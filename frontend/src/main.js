@@ -126,7 +126,7 @@ async function showGame() {
         const question = game.question;
         const remainingSeconds = Math.ceil(game.remainingTimeMs / 1000);
         queueMicrotask(() => enhanceGame(question, game, remainingSeconds));
-        render(`<section class="game"><p class="tag">PERGUNTA ${game.position} DE ${game.totalQuestions}</p><h1>Leia o enunciado.</h1><p class="question-meta">${escapeHtml(game.discipline)} · ${game.questionYear} · ENEM</p><div class="answers">${question.alternatives.map((alt, index) => `<button data-action="answer" data-letter="${alt.letter}" ${game.playerAnswer ? "disabled" : ""} class="answer-${index} ${game.playerAnswer === alt.letter ? "selected" : ""}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
+        render(`<section class="game"><p class="tag">PERGUNTA ${game.position} DE ${game.totalQuestions}</p><h1>Leia o enunciado.</h1><p class="question-meta">${escapeHtml(game.discipline)} · ${game.questionYear} · ENEM</p>${game.canAnswer === false ? '<p class="lead">Você entrou durante esta pergunta e poderá responder na próxima.</p>' : ''}<div class="answers">${question.alternatives.map((alt, index) => `<button data-action="answer" data-letter="${alt.letter}" ${game.playerAnswer || game.canAnswer === false ? "disabled" : ""} class="answer-${index} ${game.playerAnswer === alt.letter ? "selected" : ""}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
     } catch (error) {
         notify(error.message);
         showLobby();
@@ -138,6 +138,7 @@ async function handleClick(event) {
     if (!button) return;
     const { action } = button.dataset;
     if (action === "profile") {
+        if (session.code && !await askConfirmation("Deseja sair da sala e voltar ao início?")) return;
         await leaveCurrentRoom();
         showProfile();
     }
@@ -158,10 +159,12 @@ async function handleClick(event) {
         } catch (error) { notify(error.message); }
     }
     if (action === "leave") {
+        if (!await askConfirmation("Deseja realmente sair da sala? Você poderá voltar usando o código.")) return;
         await leaveCurrentRoom();
         showJoin();
     }
     if (action === "close") {
+        if (!await askConfirmation("Deseja fechar a sala? Todos os participantes serão removidos.")) return;
         try {
             await request(`/api/games/${session.code}/close`, { method: "POST", headers: { "x-host-token": session.hostToken } });
             clearSession();
@@ -349,13 +352,17 @@ function showCountdown(startsAt) {
     overlay.className = "countdown-overlay";
     overlay.innerHTML = '<p>PRÓXIMA PERGUNTA</p><strong>5</strong>';
     document.body.append(overlay);
+    let displayedNumber = null;
     const update = () => {
         const remaining = Math.max(0, startsAt - Date.now());
         const number = Math.min(5, Math.ceil(remaining / 1000));
-        overlay.querySelector("strong").textContent = number;
-        overlay.querySelector("strong").classList.remove("count-pop");
-        void overlay.querySelector("strong").offsetWidth;
-        overlay.querySelector("strong").classList.add("count-pop");
+        if (number !== displayedNumber) {
+            displayedNumber = number;
+            overlay.querySelector("strong").textContent = number;
+            overlay.querySelector("strong").classList.remove("count-pop");
+            void overlay.querySelector("strong").offsetWidth;
+            overlay.querySelector("strong").classList.add("count-pop");
+        }
         if (remaining <= 0) {
             clearInterval(interval);
             setTimeout(() => overlay.remove(), 180);
@@ -363,6 +370,22 @@ function showCountdown(startsAt) {
     };
     const interval = setInterval(update, 1000);
     setTimeout(update, 180);
+}
+
+function askConfirmation(message) {
+    return new Promise((resolve) => {
+        const modal = document.createElement("section");
+        modal.className = "confirmation-modal";
+        modal.innerHTML = `<div role="dialog" aria-modal="true" aria-label="Confirmar ação"><p class="tag">CONFIRMAR</p><h2>${escapeHtml(message)}</h2><div><button class="btn" data-choice="cancel">Cancelar</button><button class="btn lime" data-choice="confirm">Confirmar</button></div></div>`;
+        modal.addEventListener("click", (event) => {
+            const choice = event.target.closest("[data-choice]")?.dataset.choice;
+            if (!choice) return;
+            modal.remove();
+            resolve(choice === "confirm");
+        });
+        document.body.append(modal);
+        modal.querySelector("[data-choice='cancel']").focus();
+    });
 }
 
 function showRoundResults(result) {
@@ -383,7 +406,12 @@ function renderQuestionText(value) {
         const index = images.push({ alt, url }) - 1;
         return `@@IMAGE_${index}@@`;
     });
-    return escapeHtml(text).replaceAll("\n", "<br>").replace(/@@IMAGE_(\d+)@@/g, (_, index) => {
+    const formatted = escapeHtml(text)
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+        .replace(/(\d{4}(?:\s*\([^)]*\))?\.)\s*(?=[A-ZÀ-Ú])/g, "$1<br><br>")
+        .replaceAll("\n", "<br>");
+    return formatted.replace(/@@IMAGE_(\d+)@@/g, (_, index) => {
         const image = images[Number(index)];
         try {
             const url = new URL(image.url);

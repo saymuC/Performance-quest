@@ -49,6 +49,8 @@ export function initializeDatabase() {
             nickname TEXT NOT NULL COLLATE NOCASE,
             player_token TEXT,
             profile_image TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            active_from_position INTEGER NOT NULL DEFAULT 1,
             score INTEGER NOT NULL DEFAULT 0 CHECK (score >= 0),
             correct_answers INTEGER NOT NULL DEFAULT 0 CHECK (correct_answers >= 0),
             wrong_answers INTEGER NOT NULL DEFAULT 0 CHECK (wrong_answers >= 0),
@@ -152,6 +154,8 @@ export function initializeDatabase() {
     );
     addColumnIfMissing("players", "player_token", "player_token TEXT");
     addColumnIfMissing("players", "profile_image", "profile_image TEXT");
+    addColumnIfMissing("players", "is_active", "is_active INTEGER NOT NULL DEFAULT 1");
+    addColumnIfMissing("players", "active_from_position", "active_from_position INTEGER NOT NULL DEFAULT 1");
     const addedCorrectAnswers = addColumnIfMissing(
         "players",
         "correct_answers",

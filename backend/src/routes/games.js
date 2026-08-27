@@ -17,7 +17,10 @@ const MIN_QUESTION_DURATION_SECONDS = 1;
 const MAX_QUESTION_DURATION_SECONDS = 120;
 const MAX_POINTS_PER_CORRECT_ANSWER = 1000;
 const MIN_POINTS_PER_CORRECT_ANSWER = 1;
-const QUESTION_PREPARATION_MS = Number(process.env.QUESTION_PREPARATION_MS);
+const configuredPreparationMs = Number(process.env.QUESTION_PREPARATION_MS);
+const QUESTION_PREPARATION_MS = Number.isFinite(configuredPreparationMs) && configuredPreparationMs >= 0
+    ? configuredPreparationMs
+    : 6_000;
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const GAME_CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{6}$`);
 const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -43,9 +46,13 @@ const findAnswerByPlayerAndQuestion = database.prepare(`
 `);
 
 const findPlayerByToken = database.prepare(`
-    SELECT id, nickname, score
+    SELECT id, nickname, score, is_active, active_from_position
     FROM players
     WHERE game_id = ? AND player_token = ?
+`);
+
+const findPlayerByNickname = database.prepare(`
+    SELECT id, nickname, is_active FROM players WHERE game_id = ? AND nickname = ?
 `);
 
 const rankingByGame = database.prepare(`
@@ -345,10 +352,6 @@ router.post("/:code/join", (req, res, next) => {
             return res.status(404).json({ error: "Sala não encontrada." });
         }
 
-        if (game.status !== "waiting") {
-            return res.status(409).json({ error: "A partida já foi iniciada." });
-        }
-
         if (!isValidNickname(nickname)) {
             return res.status(422).json({
                 error: "O apelido deve ter entre 2 e 30 caracteres."
@@ -366,6 +369,26 @@ router.post("/:code/join", (req, res, next) => {
             return res.status(422).json({ error: "Imagem de perfil inválida ou muito grande." });
         }
         const playerToken = randomUUID();
+        const previousPlayer = findPlayerByNickname.get(game.id, nickname);
+        if (game.status !== "waiting" && !previousPlayer) {
+            return res.status(409).json({ error: "A partida já foi iniciada." });
+        }
+        if (previousPlayer?.is_active) {
+            return res.status(409).json({ error: "Este apelido já está sendo usado na sala." });
+        }
+        if (previousPlayer) {
+            const activeFromPosition = game.status === "in_progress"
+                ? game.current_question_position + 1
+                : game.current_question_position;
+            database.prepare(`
+                UPDATE players
+                SET player_token = ?, profile_image = ?, is_active = 1, active_from_position = ?
+                WHERE id = ?
+            `).run(playerToken, profileImage, activeFromPosition, previousPlayer.id);
+            return res.status(200).json({
+                player: { id: previousPlayer.id, nickname, playerToken, profileImage, rejoined: true }
+            });
+        }
         const result = database.prepare(`
             INSERT INTO players (game_id, nickname, player_token, profile_image)
             VALUES (?, ?, ?, ?)
@@ -503,8 +526,14 @@ router.post("/:code/leave", (req, res, next) => {
         if (!isValidToken(playerToken)) return res.status(401).json({ error: "Token de jogador inválido." });
         const player = findPlayerByToken.get(game.id, playerToken);
         if (!player) return res.status(401).json({ error: "Token de jogador inválido." });
-        if (playerToken === game.host_token) return res.status(409).json({ error: "O host não pode sair da própria sala." });
-        database.prepare("DELETE FROM players WHERE id = ?").run(player.id);
+        if (player.id === database.prepare("SELECT MIN(id) AS id FROM players WHERE game_id = ?").get(game.id).id) {
+            return res.status(409).json({ error: "O host não pode sair da própria sala." });
+        }
+        database.prepare(`
+            UPDATE players
+            SET is_active = 0, active_from_position = ?
+            WHERE id = ?
+        `).run(game.current_question_position + 1, player.id);
         return res.status(204).end();
     } catch (error) {
         return handleGameError(error, res, next);
@@ -597,6 +626,7 @@ router.get("/:code/current", (req, res, next) => {
 
         const playerToken = req.get("x-player-token");
         let playerAnswer = null;
+        let canAnswer = true;
 
         if (playerToken) {
             if (!isValidToken(playerToken)) {
@@ -615,6 +645,7 @@ router.get("/:code/current", (req, res, next) => {
                 player.id,
                 currentQuestion.id
             )?.selected_alternative || null;
+            canAnswer = Boolean(player.is_active) && player.active_from_position <= currentQuestion.position;
         }
 
         return res.status(200).json({
@@ -628,7 +659,8 @@ router.get("/:code/current", (req, res, next) => {
             questionYear: currentQuestion.question_year,
             remainingTimeMs: Math.max(0, currentQuestion.ends_at_ms - Date.now()),
             playerAnswer,
-            expectedAnswers: database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count,
+            canAnswer,
+            expectedAnswers: database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND is_active = 1 AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count,
             receivedAnswers: database.prepare("SELECT COUNT(*) AS count FROM answers WHERE game_question_id = ?").get(currentQuestion.id).count
         });
     } catch (error) {
@@ -666,6 +698,10 @@ router.post("/:code/answer", (req, res, next) => {
 
         if (!player) {
             return res.status(401).json({ error: "Token de jogador inválido." });
+        }
+
+        if (!player.is_active || player.active_from_position > game.current_question_position) {
+            return res.status(409).json({ error: "Você poderá responder na próxima questão." });
         }
 
         const hostPlayer = database.prepare(`
@@ -899,7 +935,7 @@ function finishRoundWhenEveryoneAnswered(game, currentQuestion) {
         const expectedAnswers = database.prepare(`
             SELECT COUNT(*) AS count
             FROM players
-            WHERE game_id = ?
+            WHERE game_id = ? AND is_active = 1
               AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)
         `).get(game.id, game.id).count;
         const receivedAnswers = database.prepare(

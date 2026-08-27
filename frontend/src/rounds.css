@@ -15,3 +15,6 @@
 .question-meta { margin: 10px 0 18px; color: #61716b; font: 11px "DM Mono"; text-transform: uppercase; }
 .round-results li { grid-template-columns: 38px 42px 1fr auto; }
 .rank-avatar { width: 34px; height: 34px; border: 1px solid #10231e; border-radius: 50%; object-fit: cover; }
+.confirmation-modal { position:fixed; z-index:30; inset:0; display:grid; place-items:center; padding:20px; background:rgba(16,35,30,.64); animation:overlay-in .18s ease both; }
+.confirmation-modal > div { width:min(460px,100%); padding:30px; border:3px solid #10231e; background:#fffdf7; box-shadow:10px 10px 0 #ff6a3d; animation:result-in .25s ease both; }
+.confirmation-modal h2 { margin:0; font:700 clamp(27px,6vw,43px)/1 Fraunces; letter-spacing:-.05em; }.confirmation-modal .btn { margin-top:28px; }.confirmation-modal .btn:last-child { float:right; }
