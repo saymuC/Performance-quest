@@ -16,14 +16,14 @@ const DEFAULT_QUESTION_DURATION_SECONDS = 20;
 const MIN_QUESTION_DURATION_SECONDS = 1;
 const MAX_QUESTION_DURATION_SECONDS = 120;
 const MAX_POINTS_PER_CORRECT_ANSWER = 1000;
-const MIN_POINTS_PER_CORRECT_ANSWER = 100;
-const QUESTION_PREPARATION_MS = Number(process.env.QUESTION_PREPARATION_MS ?? 5_000);
+const MIN_POINTS_PER_CORRECT_ANSWER = 1;
+const QUESTION_PREPARATION_MS = Number(process.env.QUESTION_PREPARATION_MS);
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const GAME_CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{6}$`);
 const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const findGameByCode = database.prepare(`
-    SELECT id, code, host_token, status, total_questions, question_duration_seconds,
+    SELECT id, code, host_token, status, round_state, total_questions, question_duration_seconds,
            current_question_position, created_at, started_at
     FROM games
     WHERE code = ?
@@ -49,9 +49,10 @@ const findPlayerByToken = database.prepare(`
 `);
 
 const rankingByGame = database.prepare(`
-    SELECT id, nickname, score
+    SELECT id, nickname, profile_image, score
     FROM players
     WHERE game_id = ?
+      AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)
     ORDER BY score DESC, joined_at ASC, id ASC
 `);
 
@@ -521,10 +522,9 @@ router.post("/:code/next", (req, res, next) => {
         }
         if (game.status !== "in_progress") return res.status(409).json({ error: "A partida não está em andamento." });
         const currentQuestion = findCurrentQuestion.get(game.id, game.current_question_position);
-        const expectedAnswers = database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count;
-        const receivedAnswers = database.prepare("SELECT COUNT(*) AS count FROM answers WHERE game_question_id = ?").get(currentQuestion.id).count;
-        if (receivedAnswers < expectedAnswers) {
-            return res.status(409).json({ error: "Aguarde todos os jogadores responderem." });
+        if (game.round_state === "question") {
+            finishRound(game.id, currentQuestion.id, "host_skipped");
+            return res.status(200).json({ status: "results", phase: "results" });
         }
         const nextPosition = game.current_question_position + 1;
         if (nextPosition > game.total_questions) {
@@ -534,7 +534,7 @@ router.post("/:code/next", (req, res, next) => {
         const startedAt = Date.now() + QUESTION_PREPARATION_MS;
         const endsAt = startedAt + (game.question_duration_seconds * 1000);
         database.transaction(() => {
-            database.prepare("UPDATE games SET current_question_position = ? WHERE id = ?").run(nextPosition, game.id);
+            database.prepare("UPDATE games SET current_question_position = ?, round_state = 'question' WHERE id = ?").run(nextPosition, game.id);
             database.prepare("UPDATE game_questions SET started_at_ms = ?, ends_at_ms = ? WHERE game_id = ? AND position = ?").run(startedAt, endsAt, game.id, nextPosition);
         })();
         return res.status(200).json({ status: "in_progress", position: nextPosition, endsAt });
@@ -587,8 +587,12 @@ router.get("/:code/current", (req, res, next) => {
 
         const nowMs = Date.now();
 
-        if (isQuestionExpired(currentQuestion, nowMs)) {
-            return res.status(409).json({ error: "O tempo desta questão terminou." });
+        if (game.round_state === "question" && isQuestionExpired(currentQuestion, nowMs)) {
+            finishRound(game.id, currentQuestion.id, "time_expired");
+        }
+
+        if (game.round_state === "results" || isQuestionExpired(currentQuestion, nowMs)) {
+            return res.status(200).json(buildRoundResults(game, currentQuestion));
         }
 
         const playerToken = req.get("x-player-token");
@@ -620,6 +624,8 @@ router.get("/:code/current", (req, res, next) => {
             questionDurationSeconds: game.question_duration_seconds,
             questionStartedAt: currentQuestion.started_at_ms,
             questionEndsAt: currentQuestion.ends_at_ms,
+            discipline: currentQuestion.discipline,
+            questionYear: currentQuestion.question_year,
             remainingTimeMs: Math.max(0, currentQuestion.ends_at_ms - Date.now()),
             playerAnswer,
             expectedAnswers: database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count,
@@ -788,14 +794,13 @@ router.post("/:code/answer", (req, res, next) => {
             answeredAtMs,
             responseTimeMs
         });
-        const progression = advanceWhenEveryoneAnswered(game, currentQuestion);
+        const roundFinished = finishRoundWhenEveryoneAnswered(game, currentQuestion);
 
         return res.status(201).json({
             correct: isCorrect,
             points,
             totalScore,
-            gameAdvanced: progression.advanced,
-            gameFinished: progression.finished
+            roundFinished
         });
     } catch (error) {
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -822,7 +827,7 @@ router.get("/:code/ranking", (req, res, next) => {
             return res.status(404).json({ error: "Sala não encontrada." });
         }
 
-        const ranking = rankingByGame.all(game.id).map((player, index) => ({
+        const ranking = rankingByGame.all(game.id, game.id).map((player, index) => ({
             position: index + 1,
             nickname: player.nickname,
             score: player.score
@@ -875,19 +880,20 @@ function validateGameCreationInput({ hostNickname, year, area, quantity, questio
     return null;
 }
 
-function advanceWhenEveryoneAnswered(game, currentQuestion) {
+function finishRoundWhenEveryoneAnswered(game, currentQuestion) {
     return database.transaction(() => {
         const freshGame = database.prepare(`
-            SELECT status, current_question_position, total_questions, question_duration_seconds
+            SELECT status, round_state, current_question_position
             FROM games WHERE id = ?
         `).get(game.id);
 
         if (
             !freshGame ||
             freshGame.status !== "in_progress" ||
+            freshGame.round_state !== "question" ||
             freshGame.current_question_position !== currentQuestion.position
         ) {
-            return { advanced: false, finished: false };
+            return false;
         }
 
         const expectedAnswers = database.prepare(`
@@ -901,45 +907,45 @@ function advanceWhenEveryoneAnswered(game, currentQuestion) {
         ).get(currentQuestion.id).count;
 
         if (expectedAnswers === 0 || receivedAnswers < expectedAnswers) {
-            return { advanced: false, finished: false };
+            return false;
         }
-
-        const nextPosition = currentQuestion.position + 1;
-        if (nextPosition > freshGame.total_questions) {
-            database.prepare(`
-                UPDATE games SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).run(game.id);
-            return { advanced: true, finished: true };
-        }
-
-        const startedAtMs = Date.now() + QUESTION_PREPARATION_MS;
-        const endsAtMs = startedAtMs + (freshGame.question_duration_seconds * 1000);
-        const nextQuestion = findCurrentQuestion.get(game.id, nextPosition);
-
-        database.prepare(`
-            UPDATE games SET current_question_position = ? WHERE id = ?
-        `).run(nextPosition, game.id);
-        database.prepare(`
-            UPDATE game_questions SET started_at_ms = ?, ends_at_ms = ?
-            WHERE id = ?
-        `).run(startedAtMs, endsAtMs, nextQuestion.id);
-        database.prepare(`
-            INSERT OR IGNORE INTO player_question_progress (
-                player_id, game_question_id, presented_at_ms
-            )
-            SELECT id, ?, ? FROM players WHERE game_id = ?
-        `).run(nextQuestion.id, startedAtMs, game.id);
-        recordGameEvent.run(
-            game.id,
-            null,
-            nextQuestion.id,
-            "question_started",
-            JSON.stringify({ position: nextPosition }),
-            startedAtMs
-        );
-
-        return { advanced: true, finished: false };
+        finishRound(game.id, currentQuestion.id, "all_answered");
+        return true;
     })();
+}
+
+function finishRound(gameId, questionId, reason) {
+    database.prepare("UPDATE games SET round_state = 'results' WHERE id = ?").run(gameId);
+    recordGameEvent.run(gameId, null, questionId, "round_finished", JSON.stringify({ reason }), Date.now());
+}
+
+function buildRoundResults(game, currentQuestion) {
+    const question = JSON.parse(currentQuestion.question_data);
+    const counts = database.prepare(`
+        SELECT selected_alternative AS letter, COUNT(*) AS count
+        FROM answers WHERE game_question_id = ? GROUP BY selected_alternative
+    `).all(currentQuestion.id);
+    const countByLetter = new Map(counts.map((row) => [row.letter, row.count]));
+    return {
+        phase: "results",
+        position: currentQuestion.position,
+        totalQuestions: game.total_questions,
+        question: {
+            prompt: question.context || question.alternativesIntroduction || "Leia o enunciado e responda.",
+            alternatives: question.alternatives,
+            correctAlternative: currentQuestion.correct_alternative
+        },
+        answerCounts: question.alternatives.map((alternative) => ({
+            letter: alternative.letter,
+            count: countByLetter.get(alternative.letter) || 0
+        })),
+        ranking: rankingByGame.all(game.id, game.id).slice(0, 5).map((player, index) => ({
+            position: index + 1,
+            nickname: player.nickname,
+            profileImage: player.profile_image,
+            score: player.score
+        }))
+    };
 }
 
 function isQuestionExpired(question, now = Date.now()) {
@@ -955,11 +961,10 @@ function calculatePoints({ isCorrect, startedAtMs, endsAtMs, answeredAtMs }) {
 
     const durationMs = endsAtMs - startedAtMs;
     const remainingMs = Math.max(0, endsAtMs - answeredAtMs);
-    const variablePoints = MAX_POINTS_PER_CORRECT_ANSWER - MIN_POINTS_PER_CORRECT_ANSWER;
-
-    return MIN_POINTS_PER_CORRECT_ANSWER + Math.floor(
-        (variablePoints * remainingMs) / durationMs
-    );
+    const progress = Math.max(0, Math.min(1, remainingMs / durationMs));
+    return Math.max(MIN_POINTS_PER_CORRECT_ANSWER, Math.round(
+        MAX_POINTS_PER_CORRECT_ANSWER * (progress ** 1.18)
+    ));
 }
 
 function shuffleQuestions(questions) {

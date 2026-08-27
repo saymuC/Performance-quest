@@ -5,6 +5,7 @@ import "./host-photo.css";
 import "./statement.css";
 import "./answer-state.css";
 import "./years.css";
+import "./rounds.css";
 import defaultProfile from "./assets/perfil_padrao.jpg";
 import { request } from "./api.js";
 import { clearSession, loadSession, saveSession } from "./session.js";
@@ -14,6 +15,7 @@ let session = loadSession();
 let profileImage = session.profileImage || defaultProfile;
 let lobbyRefresh;
 let gameTimer;
+let displayedResultKey = "";
 
 app.innerHTML = `
   <main>
@@ -120,10 +122,11 @@ async function showGame() {
         const game = await request(`/api/games/${session.code}/current`, {
             headers: { "x-player-token": session.playerToken }
         });
+        if (game.phase === "results") return showRoundResults(game);
         const question = game.question;
         const remainingSeconds = Math.ceil(game.remainingTimeMs / 1000);
         queueMicrotask(() => enhanceGame(question, game, remainingSeconds));
-        render(`<section class="game"><p class="tag">QUESTÃO ${game.position} DE ${game.totalQuestions}</p><h1>${escapeHtml(question.title)}</h1><div class="answers">${question.alternatives.map((alt) => `<button data-action="answer" data-letter="${alt.letter}" ${game.playerAnswer ? "disabled" : ""} class="${game.playerAnswer === alt.letter ? "selected" : ""}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
+        render(`<section class="game"><p class="tag">PERGUNTA ${game.position} DE ${game.totalQuestions}</p><h1>Leia o enunciado.</h1><p class="question-meta">${escapeHtml(game.discipline)} · ${game.questionYear} · ENEM</p><div class="answers">${question.alternatives.map((alt, index) => `<button data-action="answer" data-letter="${alt.letter}" ${game.playerAnswer ? "disabled" : ""} class="answer-${index} ${game.playerAnswer === alt.letter ? "selected" : ""}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
     } catch (error) {
         notify(error.message);
         showLobby();
@@ -298,12 +301,12 @@ function showCreateRoom() {
 function enhanceGame(question, game, seconds) {
     const title = document.querySelector(".game h1");
     if (!title) return;
-    title.textContent = question.title;
+    title.textContent = "Leia o enunciado:";
     const statement = document.createElement("div");
     statement.className = "statement";
-    statement.innerHTML = [question.context, question.alternativesIntroduction]
+    statement.innerHTML = [question.context || question.title, question.alternativesIntroduction]
         .filter(Boolean)
-        .map((part) => escapeHtml(part).replaceAll("\n", "<br>"))
+        .map(renderQuestionText)
         .join("<br><br>");
     title.after(statement);
     const tag = document.querySelector(".game .tag");
@@ -312,6 +315,7 @@ function enhanceGame(question, game, seconds) {
         tag.insertAdjacentHTML("beforeend", " · Prepare-se!");
         document.querySelectorAll(".answers button").forEach((button) => { button.disabled = true; });
         setTimeout(showGame, preparationMs + 100);
+        if (!session.host) showCountdown(game.questionStartedAt);
     }
     tag.insertAdjacentHTML("beforeend", ` · <b id="game-timer">${seconds}s</b>`);
     const refreshTimer = () => {
@@ -332,12 +336,61 @@ function enhanceGame(question, game, seconds) {
     if (session.host) {
         document.querySelector(".answers").replaceWith(Object.assign(document.createElement("div"), {
             className: "host-controls",
-            innerHTML: `<p class="lead">${game.receivedAnswers} de ${game.expectedAnswers} jogadores responderam.</p><p class="lead">A próxima questão será aberta automaticamente.</p>`
+            innerHTML: `<p class="lead">${game.receivedAnswers} de ${game.expectedAnswers} jogadores responderam.</p><button class="btn" data-action="next">Encerrar rodada</button>`
         }));
     }
-    if (!session.host || game.receivedAnswers < game.expectedAnswers) {
+    if (preparationMs <= 0 && (!session.host || game.receivedAnswers < game.expectedAnswers)) {
         lobbyRefresh = setInterval(showGame, 2_000);
     }
+}
+
+function showCountdown(startsAt) {
+    const overlay = document.createElement("section");
+    overlay.className = "countdown-overlay";
+    overlay.innerHTML = '<p>PRÓXIMA PERGUNTA</p><strong>5</strong>';
+    document.body.append(overlay);
+    const update = () => {
+        const remaining = Math.max(0, startsAt - Date.now());
+        const number = Math.min(5, Math.ceil(remaining / 1000));
+        overlay.querySelector("strong").textContent = number;
+        overlay.querySelector("strong").classList.remove("count-pop");
+        void overlay.querySelector("strong").offsetWidth;
+        overlay.querySelector("strong").classList.add("count-pop");
+        if (remaining <= 0) {
+            clearInterval(interval);
+            setTimeout(() => overlay.remove(), 180);
+        }
+    };
+    const interval = setInterval(update, 1000);
+    setTimeout(update, 180);
+}
+
+function showRoundResults(result) {
+    const resultKey = `${session.code}:${result.position}:${result.answerCounts.map((item) => item.count).join(",")}`;
+    if (displayedResultKey === resultKey && document.querySelector(".round-results")) {
+        if (!session.host) lobbyRefresh = setInterval(showGame, 1_500);
+        return;
+    }
+    displayedResultKey = resultKey;
+    const total = Math.max(1, ...result.answerCounts.map((item) => item.count));
+    render(`<section class="round-results"><p class="tag">RESULTADO DA RODADA ${result.position}</p><h1>Resposta.</h1><p class="result-prompt">${renderQuestionText(result.question.prompt)}</p><section class="answer-chart">${result.answerCounts.map((item, index) => `<article class="answer-${index} ${item.letter === result.question.correctAlternative ? "correct" : ""}"><b>${item.letter}</b><i style="--bar:${Math.round((item.count / total) * 140)}px"></i><strong>${item.count}</strong></article>`).join("")}</section><p class="correct-answer">Resposta correta: <b>${result.question.correctAlternative}</b></p><ol>${result.ranking.map((player) => `<li><span>${player.position}º</span><img class="rank-avatar" src="${player.profileImage || defaultProfile}" alt=""><b>${escapeHtml(player.nickname)}</b><strong>${player.score} pts</strong></li>`).join("")}</ol>${session.host ? '<button class="btn lime" data-action="next">Continuar →</button>' : '<p class="lead">Aguarde o host continuar.</p>'}</section>`);
+    if (!session.host) lobbyRefresh = setInterval(showGame, 1_500);
+}
+
+function renderQuestionText(value) {
+    const images = [];
+    const text = String(value ?? "").replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_, alt, url) => {
+        const index = images.push({ alt, url }) - 1;
+        return `@@IMAGE_${index}@@`;
+    });
+    return escapeHtml(text).replaceAll("\n", "<br>").replace(/@@IMAGE_(\d+)@@/g, (_, index) => {
+        const image = images[Number(index)];
+        try {
+            const url = new URL(image.url);
+            if (!["http:", "https:"].includes(url.protocol)) return "";
+            return `<img class="question-image" src="${url.href}" alt="${escapeHtml(image.alt || "Imagem da questão")}" loading="lazy">`;
+        } catch { return ""; }
+    });
 }
 
 async function checkHealth() {

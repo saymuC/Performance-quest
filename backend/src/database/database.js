@@ -27,6 +27,8 @@ export function initializeDatabase() {
             host_token TEXT,
             status TEXT NOT NULL DEFAULT 'waiting'
                 CHECK (status IN ('waiting', 'in_progress', 'finished')),
+            round_state TEXT NOT NULL DEFAULT 'question'
+                CHECK (round_state IN ('question', 'results')),
             total_questions INTEGER NOT NULL DEFAULT 0
                 CHECK (total_questions >= 0),
             selected_year INTEGER,
@@ -138,6 +140,11 @@ export function initializeDatabase() {
     `);
 
     addColumnIfMissing("games", "host_token", "host_token TEXT");
+    addColumnIfMissing(
+        "games",
+        "round_state",
+        "round_state TEXT NOT NULL DEFAULT 'question'"
+    );
     addColumnIfMissing(
         "games",
         "current_question_position",
