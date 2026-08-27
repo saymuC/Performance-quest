@@ -974,27 +974,48 @@ function shuffleQuestions(questions) {
 }
 
 async function collectQuestions({ years, area, quantity }) {
-    const questions = [];
+    const requestedYears = shuffleQuestions([...new Set(years)]);
+    const questionBuckets = await Promise.all(requestedYears.map(async (year) => ({
+        year,
+        questions: await getCompatibleQuestions(year, area)
+    })));
+    const selected = takeBalancedQuestions(questionBuckets, quantity);
 
-    const requestedYears = [...new Set(years)].sort((first, second) => second - first);
-    for (const currentYear of requestedYears) {
-        if (questions.length >= quantity) break;
-        const data = await getQuestions(currentYear);
-        const compatible = area
-            ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
-            : data.questions;
-        questions.push(...shuffleQuestions(compatible));
+    // Só completa com anos anteriores quando os anos escolhidos não têm questões suficientes.
+    for (
+        let year = Math.min(...requestedYears) - 1;
+        year >= 2009 && selected.length < quantity;
+        year -= 1
+    ) {
+        questionBuckets.push({ year, questions: await getCompatibleQuestions(year, area) });
+        selected.push(...takeBalancedQuestions(questionBuckets, quantity - selected.length));
     }
 
-    for (let currentYear = Math.min(...requestedYears) - 1; currentYear >= 2009 && questions.length < quantity; currentYear -= 1) {
-        const data = await getQuestions(currentYear);
-        const compatible = area
-            ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
-            : data.questions;
-        questions.push(...shuffleQuestions(compatible));
+    return shuffleQuestions(selected).slice(0, quantity);
+}
+
+async function getCompatibleQuestions(year, area) {
+    const data = await getQuestions(year);
+    const compatible = area
+        ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
+        : data.questions;
+    return shuffleQuestions(compatible);
+}
+
+function takeBalancedQuestions(questionBuckets, quantity) {
+    const selected = [];
+    let available = questionBuckets.filter((bucket) => bucket.questions.length > 0);
+
+    while (selected.length < quantity && available.length > 0) {
+        for (const bucket of shuffleQuestions(available)) {
+            if (selected.length >= quantity) break;
+            const question = bucket.questions.pop();
+            if (question) selected.push(question);
+        }
+        available = available.filter((bucket) => bucket.questions.length > 0);
     }
 
-    return questions.slice(0, quantity);
+    return selected;
 }
 
 function normalizeSelectedYears(years, fallbackYear) {
