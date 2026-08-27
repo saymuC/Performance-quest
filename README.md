@@ -77,7 +77,7 @@ Defina no ambiente de produção:
 ```env
 NODE_ENV=production
 HOST=0.0.0.0
-PORT=3000
+PORT=8080
 HOST_PASSWORD=1234
 FRONTEND_URL=https://SEU-FRONTEND.example
 DATABASE_PATH=src/data/banco.db
@@ -110,6 +110,8 @@ Publique o conteúdo gerado em `frontend/dist` em um serviço de hospedagem est�
 
 1. Ajuste `backend/discloud.config`: substitua `ID=SUBSTITUA_PELO_SEU_SUBDOMINIO` pelo subdomínio escolhido. A configuração já solicita `1536 MB` de RAM e inicia a API com `npm run start`.
 2. Configure as variáveis de ambiente no painel da Discloud, principalmente `NODE_ENV`, `HOST_PASSWORD`, `FRONTEND_URL`, `DATABASE_PATH` e `ENEM_API_URL`. Não publique senhas reais em repositórios públicos.
+
+   Para uma aplicação `TYPE=site`, use obrigatoriamente `HOST=0.0.0.0` e `PORT=8080`.
 3. Envie o **conteúdo da pasta `backend`** para a aplicação Discloud. O arquivo `discloud.config` precisa ficar na raiz do envio.
 4. Após a publicação, teste `https://SEU-SUBDOMINIO/api/health`. A resposta esperada contém `ok: true`.
 5. Coloque essa URL em `frontend/.env` como `VITE_API_URL`, execute `npm run build` no frontend e publique `frontend/dist`.
