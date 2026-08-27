@@ -17,6 +17,7 @@ const MIN_QUESTION_DURATION_SECONDS = 1;
 const MAX_QUESTION_DURATION_SECONDS = 120;
 const MAX_POINTS_PER_CORRECT_ANSWER = 1000;
 const MIN_POINTS_PER_CORRECT_ANSWER = 100;
+const QUESTION_PREPARATION_MS = Number(process.env.QUESTION_PREPARATION_MS ?? 5_000);
 const GAME_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const GAME_CODE_PATTERN = new RegExp(`^[${GAME_CODE_ALPHABET}]{6}$`);
 const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -36,7 +37,7 @@ const findCurrentQuestion = database.prepare(`
 `);
 
 const findAnswerByPlayerAndQuestion = database.prepare(`
-    SELECT id
+    SELECT id, selected_alternative
     FROM answers
     WHERE player_id = ? AND game_question_id = ?
 `);
@@ -264,6 +265,7 @@ router.post("/", async (req, res, next) => {
         const {
             hostNickname,
             year,
+            years,
             area,
             quantity = 10,
             questionDurationSeconds = DEFAULT_QUESTION_DURATION_SECONDS
@@ -281,11 +283,12 @@ router.post("/", async (req, res, next) => {
         }
 
         const normalizedArea = area?.trim().toLowerCase();
+        const selectedYears = normalizeSelectedYears(years, year);
         if (process.env.HOST_PASSWORD && req.get("x-host-password") !== process.env.HOST_PASSWORD) {
             return res.status(401).json({ error: "Senha do host inválida." });
         }
         const questions = await collectQuestions({
-            year: Number(year),
+            years: selectedYears,
             area: normalizedArea,
             quantity: Number(quantity)
         });
@@ -301,7 +304,7 @@ router.post("/", async (req, res, next) => {
             hostProfileImage: normalizeProfileImage(req.body.profileImage),
             questions,
             questionDurationSeconds: Number(questionDurationSeconds),
-            selectedYear: Number(year),
+            selectedYear: selectedYears[0],
             selectedArea: normalizedArea || null,
             requestedQuantity: Number(quantity)
         });
@@ -422,7 +425,7 @@ router.post("/:code/start", (req, res, next) => {
             return res.status(409).json({ error: "A partida já foi iniciada." });
         }
 
-        const questionStartedAtMs = Date.now();
+        const questionStartedAtMs = Date.now() + QUESTION_PREPARATION_MS;
         const questionEndsAtMs = questionStartedAtMs + (game.question_duration_seconds * 1000);
 
         database.transaction(() => {
@@ -507,6 +510,39 @@ router.post("/:code/leave", (req, res, next) => {
     }
 });
 
+router.post("/:code/next", (req, res, next) => {
+    try {
+        const code = normalizeGameCode(req.params.code);
+        const hostToken = req.get("x-host-token");
+        const game = code && findGameByCode.get(code);
+        if (!game) return res.status(404).json({ error: "Sala não encontrada." });
+        if (!isValidToken(hostToken) || hostToken !== game.host_token) {
+            return res.status(403).json({ error: "Apenas o host pode avançar." });
+        }
+        if (game.status !== "in_progress") return res.status(409).json({ error: "A partida não está em andamento." });
+        const currentQuestion = findCurrentQuestion.get(game.id, game.current_question_position);
+        const expectedAnswers = database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count;
+        const receivedAnswers = database.prepare("SELECT COUNT(*) AS count FROM answers WHERE game_question_id = ?").get(currentQuestion.id).count;
+        if (receivedAnswers < expectedAnswers) {
+            return res.status(409).json({ error: "Aguarde todos os jogadores responderem." });
+        }
+        const nextPosition = game.current_question_position + 1;
+        if (nextPosition > game.total_questions) {
+            database.prepare("UPDATE games SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?").run(game.id);
+            return res.status(200).json({ status: "finished" });
+        }
+        const startedAt = Date.now() + QUESTION_PREPARATION_MS;
+        const endsAt = startedAt + (game.question_duration_seconds * 1000);
+        database.transaction(() => {
+            database.prepare("UPDATE games SET current_question_position = ? WHERE id = ?").run(nextPosition, game.id);
+            database.prepare("UPDATE game_questions SET started_at_ms = ?, ends_at_ms = ? WHERE game_id = ? AND position = ?").run(startedAt, endsAt, game.id, nextPosition);
+        })();
+        return res.status(200).json({ status: "in_progress", position: nextPosition, endsAt });
+    } catch (error) {
+        return handleGameError(error, res, next);
+    }
+});
+
 router.post("/:code/close", (req, res, next) => {
     try {
         const code = normalizeGameCode(req.params.code);
@@ -556,6 +592,7 @@ router.get("/:code/current", (req, res, next) => {
         }
 
         const playerToken = req.get("x-player-token");
+        let playerAnswer = null;
 
         if (playerToken) {
             if (!isValidToken(playerToken)) {
@@ -570,6 +607,10 @@ router.get("/:code/current", (req, res, next) => {
 
             ensureQuestionProgress.run(player.id, currentQuestion.id, currentQuestion.started_at_ms);
             markQuestionViewed.run(nowMs, player.id, currentQuestion.id);
+            playerAnswer = findAnswerByPlayerAndQuestion.get(
+                player.id,
+                currentQuestion.id
+            )?.selected_alternative || null;
         }
 
         return res.status(200).json({
@@ -579,7 +620,10 @@ router.get("/:code/current", (req, res, next) => {
             questionDurationSeconds: game.question_duration_seconds,
             questionStartedAt: currentQuestion.started_at_ms,
             questionEndsAt: currentQuestion.ends_at_ms,
-            remainingTimeMs: Math.max(0, currentQuestion.ends_at_ms - Date.now())
+            remainingTimeMs: Math.max(0, currentQuestion.ends_at_ms - Date.now()),
+            playerAnswer,
+            expectedAnswers: database.prepare("SELECT COUNT(*) AS count FROM players WHERE game_id = ? AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)").get(game.id, game.id).count,
+            receivedAnswers: database.prepare("SELECT COUNT(*) AS count FROM answers WHERE game_question_id = ?").get(currentQuestion.id).count
         });
     } catch (error) {
         return handleGameError(error, res, next);
@@ -618,6 +662,13 @@ router.post("/:code/answer", (req, res, next) => {
             return res.status(401).json({ error: "Token de jogador inválido." });
         }
 
+        const hostPlayer = database.prepare(`
+            SELECT id FROM players WHERE game_id = ? ORDER BY id ASC LIMIT 1
+        `).get(game.id);
+        if (hostPlayer && player.id === hostPlayer.id) {
+            return res.status(403).json({ error: "O host não responde às questões." });
+        }
+
         const currentQuestion = findCurrentQuestion.get(game.id, game.current_question_position);
 
         if (!currentQuestion) {
@@ -635,6 +686,10 @@ router.post("/:code/answer", (req, res, next) => {
             currentQuestion.id,
             currentQuestion.started_at_ms
         );
+
+        if (answeredAtMs < currentQuestion.started_at_ms) {
+            return res.status(409).json({ error: "Aguarde o início da questão." });
+        }
 
         if (isQuestionExpired(currentQuestion, answeredAtMs)) {
             recordAnswerAttempt.run(
@@ -733,11 +788,14 @@ router.post("/:code/answer", (req, res, next) => {
             answeredAtMs,
             responseTimeMs
         });
+        const progression = advanceWhenEveryoneAnswered(game, currentQuestion);
 
         return res.status(201).json({
             correct: isCorrect,
             points,
-            totalScore
+            totalScore,
+            gameAdvanced: progression.advanced,
+            gameFinished: progression.finished
         });
     } catch (error) {
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -771,9 +829,10 @@ router.get("/:code/ranking", (req, res, next) => {
         }));
 
         const players = database.prepare(`
-            SELECT nickname, profile_image, player_token = ? AS is_host
+            SELECT nickname, profile_image,
+                   id = (SELECT MIN(id) FROM players WHERE game_id = ?) AS is_host
             FROM players WHERE game_id = ? ORDER BY joined_at ASC, id ASC
-        `).all(game.host_token, game.id).map((player) => ({
+        `).all(game.id, game.id).map((player) => ({
             nickname: player.nickname,
             profileImage: player.profile_image,
             isHost: Boolean(player.is_host)
@@ -816,6 +875,73 @@ function validateGameCreationInput({ hostNickname, year, area, quantity, questio
     return null;
 }
 
+function advanceWhenEveryoneAnswered(game, currentQuestion) {
+    return database.transaction(() => {
+        const freshGame = database.prepare(`
+            SELECT status, current_question_position, total_questions, question_duration_seconds
+            FROM games WHERE id = ?
+        `).get(game.id);
+
+        if (
+            !freshGame ||
+            freshGame.status !== "in_progress" ||
+            freshGame.current_question_position !== currentQuestion.position
+        ) {
+            return { advanced: false, finished: false };
+        }
+
+        const expectedAnswers = database.prepare(`
+            SELECT COUNT(*) AS count
+            FROM players
+            WHERE game_id = ?
+              AND id != (SELECT MIN(id) FROM players WHERE game_id = ?)
+        `).get(game.id, game.id).count;
+        const receivedAnswers = database.prepare(
+            "SELECT COUNT(*) AS count FROM answers WHERE game_question_id = ?"
+        ).get(currentQuestion.id).count;
+
+        if (expectedAnswers === 0 || receivedAnswers < expectedAnswers) {
+            return { advanced: false, finished: false };
+        }
+
+        const nextPosition = currentQuestion.position + 1;
+        if (nextPosition > freshGame.total_questions) {
+            database.prepare(`
+                UPDATE games SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).run(game.id);
+            return { advanced: true, finished: true };
+        }
+
+        const startedAtMs = Date.now() + QUESTION_PREPARATION_MS;
+        const endsAtMs = startedAtMs + (freshGame.question_duration_seconds * 1000);
+        const nextQuestion = findCurrentQuestion.get(game.id, nextPosition);
+
+        database.prepare(`
+            UPDATE games SET current_question_position = ? WHERE id = ?
+        `).run(nextPosition, game.id);
+        database.prepare(`
+            UPDATE game_questions SET started_at_ms = ?, ends_at_ms = ?
+            WHERE id = ?
+        `).run(startedAtMs, endsAtMs, nextQuestion.id);
+        database.prepare(`
+            INSERT OR IGNORE INTO player_question_progress (
+                player_id, game_question_id, presented_at_ms
+            )
+            SELECT id, ?, ? FROM players WHERE game_id = ?
+        `).run(nextQuestion.id, startedAtMs, game.id);
+        recordGameEvent.run(
+            game.id,
+            null,
+            nextQuestion.id,
+            "question_started",
+            JSON.stringify({ position: nextPosition }),
+            startedAtMs
+        );
+
+        return { advanced: true, finished: false };
+    })();
+}
+
 function isQuestionExpired(question, now = Date.now()) {
     return !Number.isInteger(question.started_at_ms) ||
         !Number.isInteger(question.ends_at_ms) ||
@@ -847,10 +973,20 @@ function shuffleQuestions(questions) {
     return shuffled;
 }
 
-async function collectQuestions({ year, area, quantity }) {
+async function collectQuestions({ years, area, quantity }) {
     const questions = [];
 
-    for (let currentYear = year; currentYear >= 2009 && questions.length < quantity; currentYear -= 1) {
+    const requestedYears = [...new Set(years)].sort((first, second) => second - first);
+    for (const currentYear of requestedYears) {
+        if (questions.length >= quantity) break;
+        const data = await getQuestions(currentYear);
+        const compatible = area
+            ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
+            : data.questions;
+        questions.push(...shuffleQuestions(compatible));
+    }
+
+    for (let currentYear = Math.min(...requestedYears) - 1; currentYear >= 2009 && questions.length < quantity; currentYear -= 1) {
         const data = await getQuestions(currentYear);
         const compatible = area
             ? data.questions.filter((question) => question.discipline.toLowerCase() === area)
@@ -859,6 +995,12 @@ async function collectQuestions({ year, area, quantity }) {
     }
 
     return questions.slice(0, quantity);
+}
+
+function normalizeSelectedYears(years, fallbackYear) {
+    const values = Array.isArray(years) ? years : [fallbackYear];
+    return [...new Set(values.map(Number).filter((year) => Number.isInteger(year) && year >= 2009 && year <= 2023))]
+        .sort((first, second) => second - first);
 }
 
 function createGameCode() {

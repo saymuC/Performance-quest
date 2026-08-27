@@ -1,0 +1,10 @@
+.answers button.selected {
+  border: 3px solid #10231e;
+  background: #d8ff54;
+  box-shadow: 4px 4px 0 #ff6a3d;
+}
+
+.answers button:disabled:not(.selected) {
+  opacity: .45;
+  cursor: not-allowed;
+}

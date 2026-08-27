@@ -1,0 +1,69 @@
+.year-picker {
+  width: 100%;
+  margin: 4px 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.year-picker legend {
+  margin-bottom: 4px;
+  color: #10231e;
+  font-weight: 800;
+}
+
+.year-picker p {
+  margin: 0 0 10px;
+  color: #587068;
+  font-size: .82rem;
+}
+
+.year-picker > div {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.year-option {
+  position: relative;
+  display: block !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  cursor: pointer;
+}
+
+.year-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.year-option span {
+  display: grid;
+  min-height: 40px;
+  place-items: center;
+  border: 2px solid #10231e;
+  border-radius: 13px;
+  background: #fffdf7;
+  color: #10231e;
+  font-weight: 800;
+  transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+}
+
+.year-option:hover span {
+  transform: translateY(-2px);
+  box-shadow: 3px 3px 0 #10231e;
+}
+
+.year-option input:checked + span {
+  background: #d8ff54;
+  box-shadow: 3px 3px 0 #10231e;
+}
+
+.year-option input:focus-visible + span {
+  outline: 3px solid #7656ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 420px) {
+  .year-picker > div { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

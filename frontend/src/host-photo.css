@@ -1,0 +1,23 @@
+#create-form .photo-picker {
+  display: inline-flex;
+  align-self: center;
+  justify-self: center;
+  width: 180px;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #10231e;
+  background: #d8ff54;
+  color: #10231e;
+  cursor: pointer;
+  font: 700 13px "DM Mono", monospace;
+  text-transform: uppercase;
+}
+
+#host-profile-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

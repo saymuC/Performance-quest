@@ -1,6 +1,10 @@
 import "./style.css";
 import "./overrides.css";
 import "./controls.css";
+import "./host-photo.css";
+import "./statement.css";
+import "./answer-state.css";
+import "./years.css";
 import defaultProfile from "./assets/perfil_padrao.jpg";
 import { request } from "./api.js";
 import { clearSession, loadSession, saveSession } from "./session.js";
@@ -9,6 +13,7 @@ const app = document.querySelector("#app");
 let session = loadSession();
 let profileImage = session.profileImage || defaultProfile;
 let lobbyRefresh;
+let gameTimer;
 
 app.innerHTML = `
   <main>
@@ -28,6 +33,7 @@ checkHealth();
 
 function render(html) {
     clearInterval(lobbyRefresh);
+    clearInterval(gameTimer);
     document.querySelector("#view").innerHTML = html;
 }
 
@@ -35,8 +41,8 @@ function showProfile() {
     if (session.host) {
         session = {};
         clearSession();
+        profileImage = defaultProfile;
     }
-    profileImage = defaultProfile;
     render(`
       <section class="panel">
         <p class="tag">SEU PERFIL</p>
@@ -115,7 +121,9 @@ async function showGame() {
             headers: { "x-player-token": session.playerToken }
         });
         const question = game.question;
-        render(`<section class="game"><p class="tag">QUESTÃO ${game.position} DE ${game.totalQuestions}</p><h1>${escapeHtml(question.title)}</h1><div class="answers">${question.alternatives.map((alt) => `<button data-action="answer" data-letter="${alt.letter}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
+        const remainingSeconds = Math.ceil(game.remainingTimeMs / 1000);
+        queueMicrotask(() => enhanceGame(question, game, remainingSeconds));
+        render(`<section class="game"><p class="tag">QUESTÃO ${game.position} DE ${game.totalQuestions}</p><h1>${escapeHtml(question.title)}</h1><div class="answers">${question.alternatives.map((alt) => `<button data-action="answer" data-letter="${alt.letter}" ${game.playerAnswer ? "disabled" : ""} class="${game.playerAnswer === alt.letter ? "selected" : ""}"><b>${alt.letter}</b><span>${escapeHtml(alt.text)}</span></button>`).join("")}</div></section>`);
     } catch (error) {
         notify(error.message);
         showLobby();
@@ -126,7 +134,11 @@ async function handleClick(event) {
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action } = button.dataset;
-    if (action === "profile") showProfile();
+    if (action === "profile") {
+        await leaveCurrentRoom();
+        showProfile();
+    }
+    if (action === "scan-cancel") showJoin();
     if (action === "scan") scanQrCode();
     if (action === "copy") { await navigator.clipboard.writeText(session.code); notify("Código copiado."); }
     if (action === "start") {
@@ -135,26 +147,51 @@ async function handleClick(event) {
             showGame();
         } catch (error) { notify(error.message); }
     }
+    if (action === "next") {
+        try {
+            const result = await request(`/api/games/${session.code}/next`, { method: "POST", headers: { "x-host-token": session.hostToken } });
+            if (result.status === "finished") return showLobby();
+            showGame();
+        } catch (error) { notify(error.message); }
+    }
     if (action === "leave") {
-        try { await request(`/api/games/${session.code}/leave`, { method: "POST", headers: { "x-player-token": session.playerToken } }); } catch {}
-        clearSession();
-        session = {};
-        showProfile();
+        await leaveCurrentRoom();
+        showJoin();
     }
     if (action === "close") {
         try {
             await request(`/api/games/${session.code}/close`, { method: "POST", headers: { "x-host-token": session.hostToken } });
             clearSession();
             session = {};
-            showProfile();
+            showHostLogin();
         } catch (error) { notify(error.message); }
     }
     if (action === "answer") {
+        document.querySelectorAll(".answers button").forEach((answerButton) => {
+            answerButton.disabled = true;
+        });
+        button.classList.add("selected");
         try {
             const result = await request(`/api/games/${session.code}/answer`, { method: "POST", headers: { "x-player-token": session.playerToken }, body: JSON.stringify({ alternative: button.dataset.letter }) });
             notify(result.correct ? `Muito bem! +${result.points} pontos.` : "Resposta registrada.");
+            showGame();
         } catch (error) { notify(error.message); }
     }
+}
+
+async function leaveCurrentRoom() {
+    if (!session.code) return;
+    try {
+        if (session.host && session.hostToken) {
+            await request(`/api/games/${session.code}/close`, { method: "POST", headers: { "x-host-token": session.hostToken } });
+        } else if (session.playerToken) {
+            await request(`/api/games/${session.code}/leave`, { method: "POST", headers: { "x-player-token": session.playerToken } });
+        }
+    } catch {
+        // A sala pode já ter sido encerrada por outro dispositivo.
+    }
+    session = { nickname: session.nickname, profileImage: session.profileImage, host: false };
+    saveSession(session);
 }
 
 async function handleSubmit(event) {
@@ -162,6 +199,7 @@ async function handleSubmit(event) {
     const form = event.target;
     const values = Object.fromEntries(new FormData(form));
     if (form.id === "host-login-form") {
+        profileImage = defaultProfile;
         session = { hostPassword: values.password, host: true };
         saveSession(session);
         showCreateRoom();
@@ -169,8 +207,9 @@ async function handleSubmit(event) {
     }
     if (form.id === "create-form") {
         try {
-            const data = await request("/api/games", { method: "POST", headers: { "x-host-password": session.hostPassword || "" }, body: JSON.stringify({ hostNickname: values.hostNickname.trim(), year: Number(values.year), area: values.area || undefined, quantity: Number(values.quantity), questionDurationSeconds: Number(values.questionDurationSeconds) }) });
-            session = { ...session, nickname: values.hostNickname.trim(), code: data.game.code, playerToken: data.host.playerToken, hostToken: data.host.hostToken, host: true };
+            const years = Array.from(form.querySelectorAll('input[name="years"]:checked'), (input) => Number(input.value));
+            const data = await request("/api/games", { method: "POST", headers: { "x-host-password": session.hostPassword || "" }, body: JSON.stringify({ hostNickname: values.hostNickname.trim(), profileImage, year: years[0], years, area: values.area || undefined, quantity: Number(values.quantity), questionDurationSeconds: Number(values.questionDurationSeconds) }) });
+            session = { ...session, nickname: values.hostNickname.trim(), profileImage, code: data.game.code, playerToken: data.host.playerToken, hostToken: data.host.hostToken, host: true };
             saveSession(session);
             showLobby();
         } catch (error) { notify(error.message); }
@@ -210,7 +249,7 @@ async function selectImage(event) {
 
 async function scanQrCode() {
     if (!navigator.mediaDevices?.getUserMedia) return notify("Seu navegador não permite acesso à câmera.");
-    render('<section class="panel"><p class="tag">ESCANEAR QR CODE</p><video id="qr-video" autoplay playsinline></video><button class="btn wide" data-action="profile">Cancelar</button></section>');
+    render('<section class="panel"><p class="tag">ESCANEAR QR CODE</p><video id="qr-video" autoplay playsinline></video><button class="btn wide" data-action="scan-cancel">Cancelar</button></section>');
     const { BrowserQRCodeReader } = await import("@zxing/browser");
     const reader = new BrowserQRCodeReader();
     try {
@@ -249,7 +288,56 @@ function showHostLogin() {
 }
 
 function showCreateRoom() {
-    render(`<section class="panel"><p class="tag">NOVA PARTIDA</p><h1>Monte o<br><em>desafio.</em></h1><form id="create-form"><label>Nome do host<input name="hostNickname" required minlength="2" value="${escapeHtml(session.nickname || "")}"></label><label>Ano<select name="year"><option>2023</option><option>2022</option><option>2021</option></select></label><label>Área<select name="area"><option value="">Todas as áreas</option><option value="matemática">Matemática</option><option value="linguagens">Linguagens</option></select></label><label>Quantidade<select name="quantity"><option value="5">5</option><option value="10" selected>10</option><option value="20">20</option><option value="30">30</option></select></label><label>Tempo<select name="questionDurationSeconds"><option value="20">20 segundos</option><option value="30">30 segundos</option></select></label><button class="btn lime wide">Criar sala →</button></form></section>`);
+    const years = Array.from({ length: 15 }, (_, index) => 2023 - index)
+        .map((year, index) => `<label class="year-option"><input type="checkbox" name="years" value="${year}" ${index === 0 ? "checked" : ""}><span>${year}</span></label>`)
+        .join("");
+    render(`<section class="panel"><p class="tag">NOVA PARTIDA</p><h1>Monte o<br><em>desafio.</em></h1><form id="create-form"><img id="profile-preview" class="profile-photo" src="${profileImage}" alt="Foto do host"><label class="photo-picker">Selecionar foto<input id="host-profile-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label><label>Nome do host<input name="hostNickname" required minlength="2" value="${escapeHtml(session.nickname || "")}"></label><fieldset class="year-picker"><legend>Anos das questões</legend><p>Selecione um ou mais anos.</p><div>${years}</div></fieldset><label>Área<select name="area"><option value="">Todas as áreas</option><option value="matemática">Matemática</option><option value="linguagens">Linguagens</option></select></label><label>Quantidade<select name="quantity"><option value="5">5</option><option value="10" selected>10</option><option value="20">20</option><option value="30">30</option></select></label><label>Tempo<select name="questionDurationSeconds"><option value="20">20 segundos</option><option value="30">30 segundos</option><option value="60">1 minuto</option></select></label><button class="btn lime wide">Criar sala →</button></form></section>`);
+    document.querySelector("#host-profile-file").addEventListener("change", selectImage);
+}
+
+function enhanceGame(question, game, seconds) {
+    const title = document.querySelector(".game h1");
+    if (!title) return;
+    title.textContent = question.title;
+    const statement = document.createElement("div");
+    statement.className = "statement";
+    statement.innerHTML = [question.context, question.alternativesIntroduction]
+        .filter(Boolean)
+        .map((part) => escapeHtml(part).replaceAll("\n", "<br>"))
+        .join("<br><br>");
+    title.after(statement);
+    const tag = document.querySelector(".game .tag");
+    const preparationMs = game.questionStartedAt - Date.now();
+    if (preparationMs > 0) {
+        tag.insertAdjacentHTML("beforeend", " · Prepare-se!");
+        document.querySelectorAll(".answers button").forEach((button) => { button.disabled = true; });
+        setTimeout(showGame, preparationMs + 100);
+    }
+    tag.insertAdjacentHTML("beforeend", ` · <b id="game-timer">${seconds}s</b>`);
+    const refreshTimer = () => {
+        const now = Date.now();
+        const secondsLeft = preparationMs > 0 && now < game.questionStartedAt
+            ? Math.ceil((game.questionStartedAt - now) / 1000)
+            : Math.ceil(Math.max(0, game.questionEndsAt - now) / 1000);
+        const timer = document.querySelector("#game-timer");
+        if (!timer) return clearInterval(gameTimer);
+        timer.textContent = `${secondsLeft}s`;
+        if (secondsLeft === 0) {
+            clearInterval(gameTimer);
+            if (!session.host) notify("Tempo encerrado. Aguarde o host.");
+        }
+    };
+    refreshTimer();
+    gameTimer = setInterval(refreshTimer, 250);
+    if (session.host) {
+        document.querySelector(".answers").replaceWith(Object.assign(document.createElement("div"), {
+            className: "host-controls",
+            innerHTML: `<p class="lead">${game.receivedAnswers} de ${game.expectedAnswers} jogadores responderam.</p><p class="lead">A próxima questão será aberta automaticamente.</p>`
+        }));
+    }
+    if (!session.host || game.receivedAnswers < game.expectedAnswers) {
+        lobbyRefresh = setInterval(showGame, 2_000);
+    }
 }
 
 async function checkHealth() {

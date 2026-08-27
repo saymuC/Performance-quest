@@ -1,0 +1,11 @@
+.statement {
+  margin: 4px 0 20px;
+  color: #24362f;
+  font-size: clamp(.86rem, 1.7vw, 1rem);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.game h1 {
+  font-size: clamp(28px, 4vw, 46px);
+}
