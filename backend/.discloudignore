@@ -1,0 +1,8 @@
+node_modules/
+.git/
+tests/
+scripts/
+*.log
+*.db-shm
+*.db-wal
+.env.example

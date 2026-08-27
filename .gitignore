@@ -3,8 +3,6 @@ node_modules/
 backend/src/data/*.db
 backend/src/data/*.db-shm
 backend/src/data/*.db-wal
-.discloudignore
-discloud.config
 scripts/
 tests/
 backend/DEPLOYMENT.md
