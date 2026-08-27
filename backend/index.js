@@ -113,10 +113,14 @@ app.use((error, req, res, next) => {
     });
 });
 
-export { app };
+export { app, startServer };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    app.listen(PORT, HOST, () => {
+    startServer();
+}
+
+function startServer() {
+    return app.listen(PORT, HOST, () => {
         console.log(`Servidor rodando em http://${HOST}:${PORT}`);
     });
 }

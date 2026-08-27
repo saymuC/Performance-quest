@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --watch index.js --watch src index.js",
-    "start": "node index.js",
+    "start": "node bootstrap.mjs",
     "start:prod": "node index.js",
     "test": "node --test tests/game-security.test.mjs tests/full-flow-simulation.test.mjs"
   },
