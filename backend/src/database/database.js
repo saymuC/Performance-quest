@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import "../config/environment.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const databasePath = process.env.DATABASE_PATH
@@ -14,6 +15,9 @@ const database = new Database(databasePath);
 
 database.pragma("foreign_keys = ON");
 database.pragma("journal_mode = WAL");
+database.pragma("synchronous = NORMAL");
+database.pragma("busy_timeout = 5000");
+database.pragma("temp_store = MEMORY");
 
 export function initializeDatabase() {
     database.exec(`

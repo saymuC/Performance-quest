@@ -1,33 +1,35 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import "./src/config/environment.js";
 import gamesRouter from "./src/routes/games.js";
 import questionsRouter from "./src/routes/questions.js";
 import statsRouter from "./src/routes/stats.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
 
 const app = express();
 
-const PORT = Number(process.env.PORT);
-const FRONTEND_URL = process.env.FRONTEND_URL;
-const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT;
+const PORT = parsePort(process.env.PORT, 8080);
+const HOST = process.env.HOST || "0.0.0.0";
+const FRONTEND_URLS = parseAllowedOrigins(process.env.FRONTEND_URL);
+const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || "30kb";
 const RATE_LIMIT_WINDOW_MS = parsePositiveInteger(process.env.RATE_LIMIT_WINDOW_MS, 60_000);
-const RATE_LIMIT_MAX_REQUESTS = parsePositiveInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 120);
+const RATE_LIMIT_MAX_REQUESTS = parsePositiveInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 300);
 const requestsByIp = new Map();
 
-if (!FRONTEND_URL) {
+if (FRONTEND_URLS.length === 0) {
     throw new Error("FRONTEND_URL deve ser configurada.");
 }
+
+app.set("trust proxy", 1);
 
 app.use((req, res, next) => {
     const origin = req.get("origin");
 
-    if (origin && origin !== FRONTEND_URL) {
+    if (origin && !FRONTEND_URLS.includes(origin)) {
         return res.status(403).json({
             error: "Origem não autorizada."
         });
@@ -38,7 +40,7 @@ app.use((req, res, next) => {
 
 app.use(cors({
     origin(origin, callback) {
-        if (!origin || origin === FRONTEND_URL) {
+        if (!origin || FRONTEND_URLS.includes(origin)) {
             return callback(null, true);
         }
 
@@ -114,8 +116,8 @@ app.use((error, req, res, next) => {
 export { app };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    app.listen(PORT, () => {
-        console.log(`Servidor rodando em http://localhost:${PORT}`);
+    app.listen(PORT, HOST, () => {
+        console.log(`Servidor rodando em http://${HOST}:${PORT}`);
     });
 }
 
@@ -125,4 +127,19 @@ function parsePositiveInteger(value, fallback) {
     return Number.isInteger(parsedValue) && parsedValue > 0
         ? parsedValue
         : fallback;
+}
+
+function parsePort(value, fallback) {
+    const port = Number(value);
+
+    return Number.isInteger(port) && port >= 1 && port <= 65_535
+        ? port
+        : fallback;
+}
+
+function parseAllowedOrigins(value) {
+    return (value || "")
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean);
 }

@@ -1,4 +1,4 @@
-const ENEM_API_URL = process.env.ENEM_API_URL;
+import "../config/environment.js";
 
 export class EnemApiUnavailableError extends Error {
     constructor() {
@@ -21,6 +21,11 @@ function isValidQuestion(question) {
         typeof question.title === "string" &&
         typeof question.discipline === "string" &&
         typeof question.correctAlternative === "string" &&
+        (
+            question.language === undefined ||
+            question.language === null ||
+            typeof question.language === "string"
+        ) &&
         Array.isArray(question.alternatives) &&
         question.alternatives.every((alternative) =>
             alternative &&
@@ -42,11 +47,17 @@ function isValidQuestionsResponse(data) {
 }
 
 export async function getQuestions(year) {
+    const enemApiUrl = process.env.ENEM_API_URL;
+
+    if (!enemApiUrl) {
+        throw new EnemApiUnavailableError();
+    }
+
     let response;
 
     try {
         response = await fetch(
-            `${ENEM_API_URL}/exams/${year}/questions`
+            `${enemApiUrl}/exams/${year}/questions`
         );
     } catch {
         throw new EnemApiUnavailableError();

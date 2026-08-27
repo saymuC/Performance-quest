@@ -1,60 +1,31 @@
-import './style.css'
-import heroImg from './assets/hero.png'
-import javascriptLogo from './assets/javascript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.js'
+import "./style.css";
 
-document.querySelector('#app').innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${javascriptLogo}" class="framework" alt="JavaScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.js</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+const API = (import.meta.env.VITE_API_URL || "http://localhost:3000").replace(/\/$/, "");
+const KEY = "performance-quest-session";
+let session = JSON.parse(localStorage.getItem(KEY) || "{}"), timer;
+const app = document.querySelector("#app");
 
-<div class="ticks"></div>
+app.innerHTML = `<main><header><button class="brand" data-a="home"><i>Q</i>performance<br><b>quest</b></button><span id="status">verificando API</span></header><section id="view"></section></main><aside id="toast"></aside>`;
+document.addEventListener("click", click);
+document.addEventListener("submit", submit);
+home(); health();
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript" target="_blank">
-          <img class="button-icon" src="${javascriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
-
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
-
-setupCounter(document.querySelector('#counter'))
+function home() {
+  clearInterval(timer);
+  view(`<section class="hero"><p class="tag">ENEM · AO VIVO · EM EQUIPE</p><h1>Aprender fica mais<br><em>vivo</em> quando é jogo.</h1><p class="lead">Crie uma sala, reúna a turma e transforme questões do ENEM em uma disputa rápida.</p><p><button class="btn lime" data-a="create">Criar uma sala →</button><button class="btn" data-a="join">Entrar com código</button></p></section><section class="steps"><article><b>01</b><h2>Escolha o recorte</h2><p>Ano, área e quantidade de questões.</p></article><article><b>02</b><h2>Joguem ao vivo</h2><p>Respostas cronometradas e pontuação por velocidade.</p></article><article><b>03</b><h2>Veja a evolução</h2><p>Ranking e desempenho após cada partida.</p></article></section>`);
+}
+function create() { form("NOVA PARTIDA", "Monte o desafio.", "create-form", `<label>Seu apelido<input name="hostNickname" required minlength="2" maxlength="30" placeholder="Ex.: Prof. Ana"></label><div class="pair"><label>Ano<select name="year">${[2023,2022,2021,2020].map(x=>`<option>${x}</option>`).join("")}</select></label><label>Questões<select name="quantity"><option value="5">5 questões</option><option value="10" selected>10 questões</option><option value="15">15 questões</option></select></label></div><label>Área<select name="area"><option value="">Todas as áreas</option><option value="matemática">Matemática</option><option value="linguagens">Linguagens</option><option value="ciências humanas">Ciências humanas</option><option value="ciências da natureza">Ciências da natureza</option></select></label><label>Tempo por questão<select name="questionDurationSeconds"><option value="15">15 segundos</option><option value="20" selected>20 segundos</option><option value="30">30 segundos</option><option value="60">1 minuto</option></select></label>`); }
+function join() { form("ENTRAR NA PARTIDA", "Qual é o código?", "join-form", `<label>Código da sala<input class="code" name="code" required minlength="6" maxlength="6" placeholder="ABC123"></label><label>Seu apelido<input name="nickname" required minlength="2" maxlength="30" placeholder="Como a turma te chama?"></label>`); }
+function form(tag,title,id,fields) { view(`<section class="panel"><button class="back" data-a="home">← Início</button><p class="tag">${tag}</p><h1>${title}</h1><form id="${id}">${fields}<button class="btn lime wide">Continuar →</button></form></section>`); }
+function lobby() { clearInterval(timer); view(`<section class="lobby"><p class="tag">SALA PRONTA</p><h1>Convide a turma.</h1><div class="codebox"><small>CÓDIGO DA SALA</small><strong>${esc(session.code)}</strong><button data-a="copy">copiar</button></div><p class="lead">Envie o código acima. Quando todos entrarem, inicie a partida.</p><p>${session.host?'<button class="btn lime" data-a="start">Começar agora →</button>':''}<button class="btn" data-a="ranking">Ver ranking</button></p></section>`); }
+async function game() {
+  try { const d=await api(`/api/games/${session.code}/current`,{headers:{"x-player-token":session.playerToken}}),q=d.question,total=d.questionDurationSeconds,seconds=Math.ceil(d.remainingTimeMs/1000); view(`<section class="game"><div class="meta"><span>QUESTÃO ${d.position}</span><b id="time">${seconds}s</b><span>${esc(q.discipline||"ENEM")}</span></div><div class="line"><i id="bar" style="width:${seconds/total*100}%"></i></div><p class="tag">ESCOLHA A MELHOR RESPOSTA</p><h1>${esc(q.title)}</h1><div class="answers">${q.alternatives.map(a=>`<button data-a="answer" data-letter="${esc(a.letter)}"><b>${esc(a.letter)}</b><span>${esc(a.text)}</span></button>`).join("")}</div><button class="back" data-a="ranking">Ver ranking da sala →</button></section>`); clock(seconds,total); } catch(e) { say(e.message); lobby(); }
+}
+async function ranking() { clearInterval(timer); try { const {ranking:r}=await api(`/api/games/${session.code}/ranking`); view(`<section class="panel"><button class="back" data-a="lobby">← Sala</button><p class="tag">RANKING AO VIVO</p><h1>Placar da sala.</h1><ol>${r.map(p=>`<li class="${p.nickname===session.nickname?"me":""}"><span>${p.position}</span><b>${esc(p.nickname)}</b><strong>${p.score} pts</strong></li>`).join("")}</ol><button class="btn wide" data-a="ranking">Atualizar ranking</button></section>`); } catch(e){say(e.message)} }
+async function click(e) { const b=e.target.closest("[data-a]"); if(!b)return; const a=b.dataset.a; if(a==="home")home(); if(a==="create")create(); if(a==="join")join(); if(a==="lobby")lobby(); if(a==="ranking")ranking(); if(a==="copy"){await navigator.clipboard.writeText(session.code);say("Código copiado.");} if(a==="start")try{await api(`/api/games/${session.code}/start`,{method:"POST",headers:{"x-host-token":session.hostToken}});game()}catch(x){say(x.message)} if(a==="answer")answer(b.dataset.letter); }
+async function submit(e) { e.preventDefault(); const f=e.target,v=Object.fromEntries(new FormData(f)); try { if(f.id==="create-form"){const d=await api("/api/games",{method:"POST",body:JSON.stringify({...v,year:+v.year,quantity:+v.quantity,questionDurationSeconds:+v.questionDurationSeconds,area:v.area||undefined})}); session={code:d.game.code,playerToken:d.host.playerToken,hostToken:d.host.hostToken,nickname:v.hostNickname,host:true};}else{const code=v.code.trim().toUpperCase(),d=await api(`/api/games/${code}/join`,{method:"POST",body:JSON.stringify({nickname:v.nickname})});session={code,playerToken:d.player.playerToken,nickname:d.player.nickname,host:false};} localStorage.setItem(KEY,JSON.stringify(session));lobby(); }catch(x){say(x.message)} }
+async function answer(letter){document.querySelectorAll(".answers button").forEach(b=>b.disabled=true);try{const d=await api(`/api/games/${session.code}/answer`,{method:"POST",headers:{"x-player-token":session.playerToken},body:JSON.stringify({alternative:letter})});say(d.correct?`Resposta certa! +${d.points} pontos`:"Resposta registrada.");ranking()}catch(e){say(e.message)}}
+async function api(route,opt={}){const r=await fetch(API+route,{...opt,headers:{"content-type":"application/json",...opt.headers}}),d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||"Não foi possível concluir.");return d}
+async function health(){try{await api("/api/health");const s=document.querySelector("#status");s.textContent="API online";s.className="on"}catch{document.querySelector("#status").textContent="API indisponível"}}
+function clock(n,total){clearInterval(timer);timer=setInterval(()=>{n--;const t=document.querySelector("#time"),b=document.querySelector("#bar");if(!t||n<0)return clearInterval(timer);t.textContent=n+"s";b.style.width=Math.max(0,n/total*100)+"%"},1000)}
+function view(x){document.querySelector("#view").innerHTML=x} function say(x){const t=document.querySelector("#toast");t.textContent=x;t.className="show";clearTimeout(say.t);say.t=setTimeout(()=>t.className="",3200)} function esc(x){return String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}

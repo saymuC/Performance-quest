@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon index.js",
+    "dev": "nodemon --watch index.js --watch src index.js",
     "start": "node index.js",
+    "start:prod": "node index.js",
     "test": "node --test tests/game-security.test.mjs tests/full-flow-simulation.test.mjs"
   },
   "keywords": [],
